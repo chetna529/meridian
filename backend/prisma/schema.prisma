@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MarketStatus {
+  DRAFT
+  PENDING_APPROVAL
+  LIVE
+  LOCKED
+  RESOLVING
+  RESOLVED
+  DISPUTED
+  CANCELLED
+  ARCHIVED
+}
+
+enum PositionStatus {
+  OPEN
+  CLOSED
+}
+
+model User {
+  id                 String    @id @default(uuid()) @db.Uuid
+  email              String    @unique
+  username           String    @unique
+  passwordHash       String
+  avatarUrl          String?
+  bio                String?
+  reputationScore    Int       @default(0)
+  accuracyPercentage Float     @default(0)
+  totalBalance       Decimal   @default(10000)
+  investedBalance    Decimal   @default(0)
+  level              Int       @default(1)
+  xpPoints           Int       @default(0)
+  isAdmin            Boolean   @default(false)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
+
+  markets       Market[]       @relation("MarketCreator")
+  predictions   Prediction[]
+  transactions  Transaction[]
+  leaderboards  Leaderboard[]
+  comments      Comment[]
+  badges        BadgeEarned[]
+  notifications Notification[]
+  followers     UserFollower[] @relation("UserFollowers")
+  following     UserFollower[] @relation("UserFollowing")
+  walletLedgers WalletLedger[]
+  positions     Position[]
+}
+
+model Market {
+  id                 String       @id @default(uuid()) @db.Uuid
+  title              String
+  description        String
+  category           String
+  creatorId          String       @db.Uuid
+  status             MarketStatus @default(LIVE)
+  resolutionDate     DateTime?
+  resolvedDate       DateTime?
+  resolutionCriteria String?
+  imageUrl           String?
+  totalVolume        Decimal      @default(0)
+  yesPercentage      Float        @default(50)
+  noPercentage       Float        @default(50)
+  totalPredictions   Int          @default(0)
+  liquidityPool      Decimal      @default(0)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  creator      User                 @relation("MarketCreator", fields: [creatorId], references: [id])
+  options      MarketOption[]
+  predictions  Prediction[]
+  transactions Transaction[]
+  comments     Comment[]
+  positions    Position[]
+  priceHistory MarketPriceHistory[]
+  analytics    MarketAnalytics[]
+}
+
+model WalletLedger {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @db.Uuid
+  type          String // CREDIT or DEBIT
+  subType       String? // e.g., PREDICTION_STAKE, PAYOUT, REFUND
+  amount        Decimal
+  balanceBefore Decimal
+  balanceAfter  Decimal
+  referenceId   String? // e.g., predictionId, transactionId
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Position {
+  id           String         @id @default(uuid()) @db.Uuid
+  userId       String         @db.Uuid
+  marketId     String         @db.Uuid
+  optionId     String         @db.Uuid
+  shares       Decimal
+  entryPrice   Float
+  currentPrice Float?
+  pnl          Decimal?       @default(0)
+  status       PositionStatus @default(OPEN)
+  createdAt    DateTime       @default(now())
+  closedAt     DateTime?
+
+  user   User   @relation(fields: [userId], references: [id])
+  market Market @relation(fields: [marketId], references: [id])
+}
+
+model MarketPriceHistory {
+  id         String   @id @default(uuid()) @db.Uuid
+  marketId   String   @db.Uuid
+  price      Decimal
+  recordedAt DateTime @default(now())
+
+  market Market @relation(fields: [marketId], references: [id])
+}
+
+model MarketAnalytics {
+  id           String   @id @default(uuid()) @db.Uuid
+  marketId     String   @db.Uuid
+  volume24h    Decimal  @default(0)
+  volume7d     Decimal  @default(0)
+  tradersCount Int      @default(0)
+  liquidity    Decimal  @default(0)
+  computedAt   DateTime @default(now())
+
+  market Market @relation(fields: [marketId], references: [id])
+}
+
+model MarketOption {
+  id              String   @id @default(uuid()) @db.Uuid
+  marketId        String   @db.Uuid
+  optionText      String
+  totalStaked     Decimal  @default(0)
+  currentOdds     Float?
+  predictionCount Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  market      Market       @relation(fields: [marketId], references: [id])
+  predictions Prediction[]
+}
+
+model Prediction {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @db.Uuid
+  marketId        String    @db.Uuid
+  optionId        String    @db.Uuid
+  amountStaked    Decimal
+  potentialReturn Decimal?
+  status          String
+  roiPercentage   Float?
+  lockedAt        DateTime?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user   User         @relation(fields: [userId], references: [id])
+  market Market       @relation(fields: [marketId], references: [id])
+  option MarketOption @relation(fields: [optionId], references: [id])
+}
+
+model Transaction {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @db.Uuid
+  type         String
+  amount       Decimal
+  reason       String?
+  marketId     String?  @db.Uuid
+  balanceAfter Decimal
+  createdAt    DateTime @default(now())
+
+  user   User    @relation(fields: [userId], references: [id])
+  market Market? @relation(fields: [marketId], references: [id])
+}
+
+model Leaderboard {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @db.Uuid
+  leaderboardType   String
+  rank              Int
+  score             Decimal
+  winRatePercentage Float?
+  totalProfit       Decimal?
+  totalPredictions  Int?
+  computedAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, leaderboardType])
+}
+
+model Comment {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  marketId        String   @db.Uuid
+  parentCommentId String?  @db.Uuid
+  text            String
+  likes           Int      @default(0)
+  reactions       Json?
+  pinned          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user    User      @relation(fields: [userId], references: [id])
+  market  Market    @relation(fields: [marketId], references: [id])
+  parent  Comment?  @relation("CommentReplies", fields: [parentCommentId], references: [id])
+  replies Comment[] @relation("CommentReplies")
+}
+
+model UserFollower {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  followerId String   @db.Uuid
+  createdAt  DateTime @default(now())
+
+  user     User @relation("UserFollowers", fields: [userId], references: [id])
+  follower User @relation("UserFollowing", fields: [followerId], references: [id])
+
+  @@unique([userId, followerId])
+}
+
+model Badge {
+  id           String  @id @default(uuid()) @db.Uuid
+  badgeType    String  @unique
+  displayName  String
+  description  String?
+  iconUrl      String?
+  criteriaJson Json?
+
+  earned BadgeEarned[]
+}
+
+model BadgeEarned {
+  id       String   @id @default(uuid()) @db.Uuid
+  userId   String   @db.Uuid
+  badgeId  String   @db.Uuid
+  earnedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  badge Badge @relation(fields: [badgeId], references: [id])
+
+  @@unique([userId, badgeId])
+}
+
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  type      String
+  title     String
+  message   String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  adminId    String   @db.Uuid
+  action     String
+  entityType String
+  entityId   String?  @db.Uuid
+  changes    Json?
+  createdAt  DateTime @default(now())
+}
