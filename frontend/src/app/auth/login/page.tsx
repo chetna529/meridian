@@ -19,11 +19,18 @@ export default function LoginPage() {
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await api.post('/auth/login', { email, password });
+      const trimmedEmail = email.trim();
+      if (!trimmedEmail || !password) {
+        addToast('Please enter email and password', 'error');
+        return;
+      }
+
+      const res = await api.post('/auth/login', { email: trimmedEmail, password });
       login(res.data.user, res.data.token);
       addToast('Logged in successfully!', 'success');
       router.push(res.data.user?.isAdmin ? '/admin' : '/');
     } catch (err: any) {
+      console.error('Login error', err?.response || err);
       addToast(err.response?.data?.error || 'Login failed', 'error');
     }
   };
@@ -33,7 +40,7 @@ export default function LoginPage() {
       const res = await api.post('/auth/google', { credential: credentialResponse.credential });
       login(res.data.user, res.data.token);
       addToast('Logged in with Google!', 'success');
-      router.push('/');
+      router.push(res.data.user?.isAdmin ? '/admin' : '/');
     } catch (err: any) {
       addToast('Google login failed', 'error');
     }
@@ -41,7 +48,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex justify-center items-center h-full pt-20 pb-20">
-      <div className="card w-full max-w-md shadow-xl border border-[var(--color-border)] bg-white rounded-2xl p-8">
+      <div className="card w-full max-w-md shadow-xl rounded-2xl p-8">
         <h2 className="text-2xl font-bold text-center mb-6 text-[var(--color-text-primary)]">Log In to Meridian</h2>
         
         <div className="flex justify-center mb-6">
@@ -64,27 +71,29 @@ export default function LoginPage() {
               type="email" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 bg-gray-50 border border-[var(--color-border)] rounded-lg focus:outline-none focus:border-[var(--color-primary)] focus:ring-1 focus:ring-[var(--color-primary)] transition-shadow"
+              className="w-full px-4 py-2.5 bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] rounded-lg focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] transition-shadow"
               required 
             />
           </div>
-          <div className="relative">
+          <div>
             <label className="block text-sm font-medium mb-1.5 text-[var(--color-text-secondary)]">Password</label>
-            <input 
-              type={showPassword ? 'text' : 'password'} 
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 bg-gray-50 border border-[var(--color-border)] rounded-lg focus:outline-none focus:border-[var(--color-primary)] focus:ring-1 focus:ring-[var(--color-primary)] transition-shadow"
-              required 
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((prev) => !prev)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-            </button>
+            <div className="relative">
+              <input 
+                type={showPassword ? 'text' : 'password'} 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full pr-10 px-4 py-2.5 bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] rounded-lg focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] transition-shadow"
+                required 
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] z-10 p-1"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
           <button type="submit" className="w-full btn-primary py-3 mt-4 text-sm font-bold shadow-md">Log In</button>
         </form>

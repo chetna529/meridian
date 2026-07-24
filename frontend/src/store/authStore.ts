@@ -6,6 +6,7 @@ interface User {
   email: string;
   totalBalance: string | number;
   isAdmin?: boolean;
+  isEmailVerified?: boolean;
 }
 
 interface AuthStore {
@@ -15,6 +16,7 @@ interface AuthStore {
   login: (user: User, token: string) => void;
   logout: () => void;
   updateBalance: (newBalance: number) => void;
+  verifyUserEmail: () => void;
   hydrateAuth: () => void;
 }
 
@@ -40,6 +42,16 @@ export const useAuthStore = create<AuthStore>((set) => ({
     set((state) => {
       if (!state.user) return state;
       const updatedUser = { ...state.user, totalBalance: newBalance };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+      }
+      return { user: updatedUser };
+    });
+  },
+  verifyUserEmail: () => {
+    set((state) => {
+      if (!state.user) return state;
+      const updatedUser = { ...state.user, isEmailVerified: true };
       if (typeof window !== 'undefined') {
         localStorage.setItem('user', JSON.stringify(updatedUser));
       }

@@ -1,47 +1,50 @@
 'use client';
 
 import Link from 'next/link';
-import { UserCircle } from 'lucide-react';
+import { UserCircle, Sun, Moon } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
+import NotificationTab from './NotificationTab';
 
 export default function Navbar() {
   const { isAuthenticated, user, logout } = useAuthStore();
+  const { theme, toggleTheme } = useUIStore();
   const showAuthenticatedNav = isAuthenticated;
 
   return (
-    <nav className="fixed top-0 left-0 w-full h-18 bg-white border-b border-border z-50 flex items-center px-8 lg:px-12 shadow-sm">
+    <nav className="fixed top-0 left-0 w-full h-16 bg-[var(--color-bg-primary)]/95 backdrop-blur-sm border-b border-[var(--color-border)] z-50 flex items-center px-6 lg:px-10">
       <div className="w-full flex items-center justify-between">
 
         {/* Left Section */}
         <div className="flex items-center gap-10">
           <Link
             href="/"
-            className="font-bold text-xl text-primary tracking-tight"
+            className="font-bold text-lg text-[var(--color-primary)] tracking-tight"
           >
             MERIDIAN
           </Link>
 
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-text-secondary">
+          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-[var(--color-text-secondary)]">
             {showAuthenticatedNav ? (
               <>
-                <Link href="/markets" className="hover:text-text-primary transition-colors">
+                <Link href="/markets" className="hover:text-[var(--color-text-primary)] transition-colors">
                   Markets
                 </Link>
                 {user?.isAdmin ? null : (
-                  <Link href="/portfolio" className="hover:text-text-primary transition-colors">
+                  <Link href="/portfolio" className="hover:text-[var(--color-text-primary)] transition-colors">
                     Portfolio
                   </Link>
                 )}
-                <Link href="/wallet" className="hover:text-text-primary transition-colors">
+                <Link href="/wallet" className="hover:text-[var(--color-text-primary)] transition-colors">
                   Wallet
                 </Link>
-                <Link href="/analytics" className="hover:text-text-primary transition-colors">
+                <Link href="/analytics" className="hover:text-[var(--color-text-primary)] transition-colors">
                   Analytics
                 </Link>
-                <Link href="/account" className="hover:text-text-primary transition-colors">
+                <Link href="/account" className="hover:text-[var(--color-text-primary)] transition-colors">
                   Account
                 </Link>
-                <Link href="/leaderboard" className="hover:text-text-primary transition-colors">
+                <Link href="/leaderboard" className="hover:text-[var(--color-text-primary)] transition-colors">
                   Leaderboard
                 </Link>
               </>
@@ -62,11 +65,21 @@ export default function Navbar() {
         </div>
 
         {/* Right Section */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleTheme}
+            aria-label="Toggle color theme"
+            className="p-2 rounded-full text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+
           {showAuthenticatedNav ? (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <NotificationTab />
+
               {user?.username && (
-                <Link href={`/profile/${user.username}`} className="hidden sm:flex items-center gap-2 rounded-md border border-border bg-slate-100 px-3 py-1 text-sm text-text-primary hover:bg-slate-200 transition-colors">
+                <Link href={`/profile/${user.username}`} className="hidden sm:flex items-center gap-2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-bg-tertiary)] transition-colors">
                   <UserCircle className="w-4 h-4" />
                   <span>{user.username}</span>
                 </Link>
@@ -74,7 +87,7 @@ export default function Navbar() {
 
               <button
                 onClick={logout}
-                className="hidden sm:inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
+                className="hidden sm:inline-flex items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-text-primary)] px-4 py-2 text-sm font-semibold text-[var(--color-bg-primary)] hover:opacity-85 transition-opacity"
               >
                 Log Out
               </button>
@@ -83,14 +96,14 @@ export default function Navbar() {
             <div className="flex items-center gap-4">
               <Link
                 href="/auth/login"
-                className="hidden sm:block text-sm font-medium text-text-secondary hover:text-text-primary"
+                className="hidden sm:block text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
               >
                 Log In
               </Link>
 
               <Link
                 href="/auth/register"
-                className="py-2 px-4 text-sm bg-bg-primary border border-border text-black rounded-md hover:bg-gray-50 transition-colors"
+                className="py-2 px-4 text-sm bg-[var(--color-primary)] text-white rounded-[var(--radius-sm)] hover:bg-[var(--color-primary-hover)] transition-colors"
               >
                 Get Started
               </Link>

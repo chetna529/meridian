@@ -1,57 +1,165 @@
 @import "tailwindcss";
 
 @theme {
-  --color-primary: #6366f1;
-  --color-primary-light: #818cf8;
-  --color-primary-dark: #4f46e5;
-  --color-primary-hover: #4338ca;
+  /* Warm neutral surfaces (Claude-inspired cream/beige) */
+  --color-bg-primary: #faf9f5;
+  --color-bg-secondary: #f0eee6;
+  --color-bg-tertiary: #eae6da;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
 
-  --color-secondary: #06b6d4;
-  --color-secondary-light: #22d3ee;
-  --color-secondary-hover: #0891b2;
+  /* Accent: clay / terracotta */
+  --color-primary: #c2603f;
+  --color-primary-light: #d4805f;
+  --color-primary-dark: #a34e32;
+  --color-primary-hover: #a34e32;
 
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --color-info: #3b82f6;
+  --color-secondary: #6f7d5c;
+  --color-secondary-light: #8b9a76;
+  --color-secondary-hover: #5c6a4a;
 
-  --color-text-primary: #111827;
-  --color-text-secondary: #6b7280;
-  --color-text-muted: #9ca3af;
+  --color-success: #4c7a4e;
+  --color-warning: #b8792a;
+  --color-danger: #b3432e;
+  --color-info: #4a6f8a;
 
-  --color-bg-primary: #ffffff;
-  --color-bg-secondary: #f9fafb;
-  --color-bg-tertiary: #f3f4f6;
+  --color-text-primary: #1f1e1c;
+  --color-text-secondary: #6b6a63;
+  --color-text-muted: #9a988e;
 
-  --color-border: #e5e7eb;
-  --color-border-light: #f3f4f6;
-  --color-border-dark: #d1d5db;
+  --color-border: #e3e0d3;
+  --color-border-light: #ece9dd;
+  --color-border-dark: #d3cfbf;
 
   --font-primary: var(--font-inter), sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+}
+
+:root[data-theme='dark'] {
+  --color-bg-primary: #262624;
+  --color-bg-secondary: #2f2e2b;
+  --color-bg-tertiary: #3a3936;
+  --color-surface: #302f2c;
+  --color-surface-raised: #3a3936;
+
+  --color-primary: #d97a56;
+  --color-primary-light: #e59a7c;
+  --color-primary-dark: #c2603f;
+  --color-primary-hover: #e59a7c;
+
+  --color-secondary: #9caf87;
+  --color-secondary-light: #b3c39f;
+  --color-secondary-hover: #aebd97;
+
+  --color-success: #7fae7f;
+  --color-warning: #d6a24f;
+  --color-danger: #e07b64;
+  --color-info: #7fa6bf;
+
+  --color-text-primary: #ece9dd;
+  --color-text-secondary: #b5b2a5;
+  --color-text-muted: #828075;
+
+  --color-border: #46443f;
+  --color-border-light: #3a3936;
+  --color-border-dark: #56534c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not([data-theme='dark']) {
+    --color-bg-primary: #262624;
+    --color-bg-secondary: #2f2e2b;
+    --color-bg-tertiary: #3a3936;
+    --color-surface: #302f2c;
+    --color-surface-raised: #3a3936;
+
+    --color-primary: #d97a56;
+    --color-primary-light: #e59a7c;
+    --color-primary-dark: #c2603f;
+    --color-primary-hover: #e59a7c;
+
+    --color-secondary: #9caf87;
+    --color-secondary-light: #b3c39f;
+    --color-secondary-hover: #aebd97;
+
+    --color-success: #7fae7f;
+    --color-warning: #d6a24f;
+    --color-danger: #e07b64;
+    --color-info: #7fa6bf;
+
+    --color-text-primary: #ece9dd;
+    --color-text-secondary: #b5b2a5;
+    --color-text-muted: #828075;
+
+    --color-border: #46443f;
+    --color-border-light: #3a3936;
+    --color-border-dark: #56534c;
+  }
 }
 
 @layer base {
   :root {
-    --background: #f3f4f6;
-    --foreground: #111827;
+    --background: var(--color-bg-primary);
+    --foreground: var(--color-text-primary);
+  }
+
+  body {
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-family: var(--font-primary);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  ::-webkit-scrollbar {
+    display: none;
   }
   
-  body {
-    background-color: var(--background);
-    color: var(--foreground);
-    font-family: var(--font-primary);
+  * {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+
+  ::selection {
+    background-color: var(--color-primary-light);
+    color: #ffffff;
+  }
+
+  * {
+    border-color: var(--color-border);
   }
 }
 
 @layer components {
   .btn-primary {
-    @apply bg-[var(--color-primary)] text-white px-6 py-3 rounded-lg font-medium transition-transform duration-150 hover:bg-[var(--color-primary-dark)] hover:scale-[1.02] active:scale-95;
+    @apply bg-[var(--color-primary)] text-white px-6 py-3 rounded-[var(--radius-sm)] font-medium transition-all duration-150 hover:bg-[var(--color-primary-hover)] hover:scale-[1.02] active:scale-95 shadow-sm;
   }
   .btn-secondary {
-    @apply bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)] px-6 py-3 rounded-lg font-medium transition-colors duration-150 hover:bg-[var(--color-bg-secondary)];
+    @apply bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)] px-6 py-3 rounded-[var(--radius-sm)] font-medium transition-colors duration-150 hover:bg-[var(--color-bg-secondary)];
   }
   .card {
-    @apply bg-white border border-[var(--color-border)] rounded-xl p-5 shadow-sm transition-shadow duration-250 hover:shadow-md;
+    @apply bg-[var(--color-surface)] border border-[var(--color-border)] rounded-[var(--radius-lg)] p-5 shadow-md transition-shadow duration-250 hover:shadow-lg;
   }
 }
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modalZoomIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.modal-backdrop-animate {
+  animation: modalFadeIn 0.2s ease-out forwards;
+}
+
+.modal-card-animate {
+  animation: modalZoomIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+

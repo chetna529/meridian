@@ -1,62 +1,152 @@
 'use client';
 
-import { useState } from 'react';
-import { BarChart3, Sparkles, TrendingUp, Activity } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { BarChart3, TrendingUp, Users, Droplet } from 'lucide-react';
+import api from '@/lib/api';
+import { useAuthStore } from '@/store/authStore';
+import PriceChart, { ChartPoint } from '@/components/ui/PriceChart';
+import StatTile from '@/components/ui/StatTile';
+import { PageSpinner } from '@/components/ui/Skeleton';
 
-const analyticsData = {
-  price: [48, 56, 63, 72, 68, 74, 80],
-  volume: [32, 45, 52, 60, 58, 64, 71],
-  users: [22, 30, 36, 42, 38, 47, 53]
+type Market = {
+  id: string;
+  title: string;
+  category: string;
+  totalVolume: string | number;
+  options: { id: string; optionText: string }[];
+};
+
+type Analytics = {
+  volume24h: number | string;
+  volume7d: number | string;
+  tradersCount: number;
+  liquidity: number | string;
+  priceMove24h: number;
 };
 
 export default function AnalyticsPage() {
-  const [activeTab, setActiveTab] = useState<'price' | 'volume' | 'users'>('price');
+  const { isAuthenticated } = useAuthStore();
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [selectedId, setSelectedId] = useState<string>('');
+  const [range, setRange] = useState<'1h' | '24h' | '7d' | '30d'>('7d');
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setLoading(false);
+      return;
+    }
+    api.get('/markets')
+      .then((res) => {
+        setMarkets(res.data);
+        if (res.data.length > 0) setSelectedId(res.data[0].id);
+      })
+      .finally(() => setLoading(false));
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const market = markets.find((m) => m.id === selectedId);
+    if (!market) return;
+
+    api.get(`/markets/${selectedId}/price-history`, { params: { range } })
+      .then((res) => {
+        const firstOptionId = market.options?.[0]?.id;
+        const series = firstOptionId && res.data[firstOptionId] ? res.data[firstOptionId].points : [];
+        setChartData(series.map((p: any) => ({ label: new Date(p.recordedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }), value: Number(p.price) * 100 })));
+      })
+      .catch(() => setChartData([]));
+
+    api.get(`/markets/${selectedId}/analytics`)
+      .then((res) => setAnalytics(res.data))
+      .catch(() => setAnalytics(null));
+  }, [selectedId, range, markets]);
+
+  const highlights = useMemo(() => {
+    if (markets.length === 0) return null;
+    const byCategory = new Map<string, number>();
+    let topMarket = markets[0];
+    for (const m of markets) {
+      const vol = Number(m.totalVolume || 0);
+      byCategory.set(m.category, (byCategory.get(m.category) || 0) + vol);
+      if (vol > Number(topMarket.totalVolume || 0)) topMarket = m;
+    }
+    const topCategory = [...byCategory.entries()].sort((a, b) => b[1] - a[1])[0];
+    return { topMarket, topCategory: topCategory?.[0], marketCount: markets.length };
+  }, [markets]);
+
+  if (!isAuthenticated) {
+    return <div className="text-center p-20 text-[var(--color-text-secondary)]">Please log in to view analytics.</div>;
+  }
+  if (loading) return <PageSpinner />;
+
+  const selectedMarket = markets.find((m) => m.id === selectedId);
 
   return (
-    <div className="w-full pb-20">
-      <div className="max-w-6xl mx-auto px-4 md:px-6">
+    <div className="w-full max-w-[1440px] mx-auto px-4 md:px-8 xl:px-12 pt-8 pb-20">
+      <div className="w-full">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between mb-8">
           <div>
             <h1 className="text-3xl font-bold text-[var(--color-text-primary)]">Analytics</h1>
-            <p className="text-sm text-[var(--color-text-secondary)]">View market trends, volume, and user activity.</p>
+            <p className="text-sm text-[var(--color-text-secondary)]">Live volume, price history, and liquidity — pulled straight from the market you pick below.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => setActiveTab('price')} className={`px-4 py-2 rounded-lg text-sm ${activeTab === 'price' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]'}`}>Price</button>
-            <button onClick={() => setActiveTab('volume')} className={`px-4 py-2 rounded-lg text-sm ${activeTab === 'volume' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]'}`}>Volume</button>
-            <button onClick={() => setActiveTab('users')} className={`px-4 py-2 rounded-lg text-sm ${activeTab === 'users' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]'}`}>Users</button>
-          </div>
+          <select
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+            className="px-4 py-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] text-sm"
+          >
+            {markets.map((m) => <option key={m.id} value={m.id}>{m.title}</option>)}
+          </select>
         </div>
+
+        {analytics && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <StatTile label="24h Volume" value={`$${Number(analytics.volume24h).toLocaleString()}`} icon={TrendingUp} />
+            <StatTile label="7d Volume" value={`$${Number(analytics.volume7d).toLocaleString()}`} icon={BarChart3} />
+            <StatTile label="Traders" value={String(analytics.tradersCount)} icon={Users} />
+            <StatTile label="Liquidity" value={Number(analytics.liquidity).toFixed(0)} icon={Droplet} />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-6">
           <div className="card p-6">
             <div className="flex items-center justify-between gap-4 mb-6">
               <div>
-                <h2 className="text-xl font-semibold">{activeTab === 'price' ? 'Price Chart' : activeTab === 'volume' ? 'Volume Chart' : 'User Activity'}</h2>
-                <p className="text-sm text-[var(--color-text-secondary)]">Analyze the latest trends for your selected metric.</p>
+                <h2 className="text-xl font-semibold">{selectedMarket?.title || 'Price history'}</h2>
+                <p className="text-sm text-[var(--color-text-secondary)]">YES-side probability over time.</p>
               </div>
-              <div className="text-[var(--color-primary)]">
-                {activeTab === 'price' ? <TrendingUp className="w-6 h-6" /> : activeTab === 'volume' ? <BarChart3 className="w-6 h-6" /> : <Activity className="w-6 h-6" />}
-              </div>
-            </div>
-            <div className="h-72 rounded-3xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] p-6 overflow-hidden">
-              <div className="h-full flex items-end gap-3">
-                {analyticsData[activeTab].map((value, index) => (
-                  <div key={index} className="flex flex-1 flex-col items-center gap-2">
-                    <span className="text-xs text-[var(--color-text-secondary)]">{value}%</span>
-                    <div className="w-full rounded-full bg-[var(--color-primary)]" style={{ height: `${Math.max(value, 10)}%` }} />
-                    <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--color-text-secondary)]">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][index]}</span>
-                  </div>
+              <div className="flex gap-2">
+                {(['1h', '24h', '7d', '30d'] as const).map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setRange(r)}
+                    className={`px-3 py-1 text-xs font-medium rounded-full ${range === r ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)]'}`}
+                  >
+                    {r}
+                  </button>
                 ))}
               </div>
             </div>
+            <PriceChart data={chartData} color="var(--color-primary)" />
           </div>
+
           <div className="card p-6">
-            <h3 className="text-lg font-semibold mb-4">Analytics Highlights</h3>
+            <h3 className="text-lg font-semibold mb-4">Platform Highlights</h3>
             <div className="space-y-4 text-sm text-[var(--color-text-secondary)]">
-              <div className="rounded-2xl bg-white p-4 border border-[var(--color-border)]">Top market movement this week: Crypto</div>
-              <div className="rounded-2xl bg-white p-4 border border-[var(--color-border)]">Highest volume: Finance</div>
-              <div className="rounded-2xl bg-white p-4 border border-[var(--color-border)]">Most active traders: 184</div>
-              <div className="rounded-2xl bg-white p-4 border border-[var(--color-border)]">Trending category: Sports</div>
+              <div className="rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] p-4 border border-[var(--color-border)]">
+                Highest-volume category: <strong className="text-[var(--color-text-primary)]">{highlights?.topCategory || '—'}</strong>
+              </div>
+              <div className="rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] p-4 border border-[var(--color-border)]">
+                Top market: <strong className="text-[var(--color-text-primary)]">{highlights?.topMarket?.title || '—'}</strong>
+              </div>
+              <div className="rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] p-4 border border-[var(--color-border)]">
+                24h price move: <strong className={Number(analytics?.priceMove24h || 0) >= 0 ? 'text-[var(--color-success)]' : 'text-[var(--color-danger)]'}>{Number(analytics?.priceMove24h || 0).toFixed(1)}pp</strong>
+              </div>
+              <div className="rounded-[var(--radius-md)] bg-[var(--color-bg-secondary)] p-4 border border-[var(--color-border)]">
+                Markets tracked: <strong className="text-[var(--color-text-primary)]">{highlights?.marketCount ?? 0}</strong>
+              </div>
             </div>
           </div>
         </div>
