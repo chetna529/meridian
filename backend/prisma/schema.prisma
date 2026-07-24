@@ -24,6 +24,41 @@ enum PositionStatus {
   CLOSED
 }
 
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  UPHELD
+  REJECTED
+}
+
+enum FraudFlagType {
+  WASH_TRADING
+  RAPID_FIRE
+  VOLUME_SPIKE
+}
+
+enum FraudFlagStatus {
+  OPEN
+  DISMISSED
+  CONFIRMED
+}
+
+enum ReferralStatus {
+  PENDING
+  COMPLETED
+}
+
+enum BroadcastStatus {
+  SCHEDULED
+  SENT
+  CANCELLED
+}
+
+enum BroadcastTarget {
+  ALL
+  SPECIFIC_USER
+}
+
 model User {
   id                 String    @id @default(uuid()) @db.Uuid
   email              String    @unique
@@ -32,27 +67,58 @@ model User {
   avatarUrl          String?
   bio                String?
   reputationScore    Int       @default(0)
+  trustScore         Float     @default(50)
   accuracyPercentage Float     @default(0)
   totalBalance       Decimal   @default(10000)
   investedBalance    Decimal   @default(0)
   level              Int       @default(1)
   xpPoints           Int       @default(0)
   isAdmin            Boolean   @default(false)
+  isSuspended        Boolean   @default(false)
+  suspendedAt        DateTime?
+  suspendedReason    String?
+  referralCode       String    @unique
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
   deletedAt          DateTime?
+  isEmailVerified    Boolean   @default(false)
+  verificationCode   String?
+  verificationCodeExpires DateTime?
+  fullName                String?   @default("")
+  phone                   String?   @default("")
+  timezone                String?   @default("")
+  country                 String?   @default("")
+  kycStatus               String    @default("Unverified")
+  themePreference         String    @default("dark")
+  preferredCurrency       String    @default("INR")
+  languagePreference      String    @default("English")
+  recommendedLayout       String    @default("Default")
+  emailNotifications      Boolean   @default(true)
+  walletUpdates           Boolean   @default(true)
+  marketResultAlerts      Boolean   @default(true)
+  newMarketAnnouncements  Boolean   @default(true)
+  lastLoginAt             DateTime? @default(now())
 
-  markets       Market[]       @relation("MarketCreator")
-  predictions   Prediction[]
-  transactions  Transaction[]
-  leaderboards  Leaderboard[]
-  comments      Comment[]
-  badges        BadgeEarned[]
-  notifications Notification[]
-  followers     UserFollower[] @relation("UserFollowers")
-  following     UserFollower[] @relation("UserFollowing")
-  walletLedgers WalletLedger[]
-  positions     Position[]
+  markets            Market[]           @relation("MarketCreator")
+  predictions        Prediction[]
+  transactions       Transaction[]
+  leaderboards       Leaderboard[]
+  comments           Comment[]
+  badges             BadgeEarned[]
+  notifications      Notification[]
+  followers          UserFollower[]     @relation("UserFollowers")
+  following          UserFollower[]     @relation("UserFollowing")
+  walletLedgers      WalletLedger[]
+  positions          Position[]
+  auditLogs          AuditLog[]         @relation("AdminAuditLogs")
+  marketResolutions  MarketResolution[]
+  disputesRaised     Dispute[]          @relation("DisputeRaiser")
+  fraudFlags         FraudFlag[]
+  referralsMade      Referral[]         @relation("Referrer")
+  referredBy         Referral?          @relation("Referee")
+  broadcastsCreated  NotificationBroadcast[] @relation("BroadcastCreator")
+
+  @@index([trustScore])
 }
 
 model Market {
@@ -61,7 +127,7 @@ model Market {
   description        String
   category           String
   creatorId          String       @db.Uuid
-  status             MarketStatus @default(LIVE)
+  status             MarketStatus @default(DRAFT)
   resolutionDate     DateTime?
   resolvedDate       DateTime?
   resolutionCriteria String?
@@ -71,6 +137,7 @@ model Market {
   noPercentage       Float        @default(50)
   totalPredictions   Int          @default(0)
   liquidityPool      Decimal      @default(0)
+  liquidityParam     Decimal      @default(100)
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
@@ -82,6 +149,11 @@ model Market {
   positions    Position[]
   priceHistory MarketPriceHistory[]
   analytics    MarketAnalytics[]
+  resolution   MarketResolution?
+  disputes     Dispute[]
+  fraudFlags   FraudFlag[]
+
+  @@index([status, category])
 }
 
 model WalletLedger {
@@ -97,6 +169,8 @@ model WalletLedger {
   createdAt     DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
 }
 
 model Position {
@@ -105,6 +179,7 @@ model Position {
   marketId     String         @db.Uuid
   optionId     String         @db.Uuid
   shares       Decimal
+  costBasis    Decimal        @default(0)
   entryPrice   Float
   currentPrice Float?
   pnl          Decimal?       @default(0)
@@ -112,17 +187,24 @@ model Position {
   createdAt    DateTime       @default(now())
   closedAt     DateTime?
 
-  user   User   @relation(fields: [userId], references: [id])
-  market Market @relation(fields: [marketId], references: [id])
+  user   User         @relation(fields: [userId], references: [id])
+  market Market       @relation(fields: [marketId], references: [id])
+  option MarketOption @relation(fields: [optionId], references: [id])
+
+  @@index([userId, status])
+  @@index([marketId, optionId])
 }
 
 model MarketPriceHistory {
   id         String   @id @default(uuid()) @db.Uuid
   marketId   String   @db.Uuid
+  optionId   String?  @db.Uuid
   price      Decimal
   recordedAt DateTime @default(now())
 
   market Market @relation(fields: [marketId], references: [id])
+
+  @@index([marketId, recordedAt])
 }
 
 model MarketAnalytics {
@@ -132,9 +214,12 @@ model MarketAnalytics {
   volume7d     Decimal  @default(0)
   tradersCount Int      @default(0)
   liquidity    Decimal  @default(0)
+  priceMove24h Float    @default(0)
   computedAt   DateTime @default(now())
 
   market Market @relation(fields: [marketId], references: [id])
+
+  @@index([marketId, computedAt])
 }
 
 model MarketOption {
@@ -143,11 +228,13 @@ model MarketOption {
   optionText      String
   totalStaked     Decimal  @default(0)
   currentOdds     Float?
+  sharesOutstanding Decimal @default(0)
   predictionCount Int      @default(0)
   createdAt       DateTime @default(now())
 
   market      Market       @relation(fields: [marketId], references: [id])
   predictions Prediction[]
+  positions   Position[]
 }
 
 model Prediction {
@@ -167,6 +254,9 @@ model Prediction {
   user   User         @relation(fields: [userId], references: [id])
   market Market       @relation(fields: [marketId], references: [id])
   option MarketOption @relation(fields: [optionId], references: [id])
+
+  @@index([userId])
+  @@index([marketId, optionId, status])
 }
 
 model Transaction {
@@ -181,6 +271,8 @@ model Transaction {
 
   user   User    @relation(fields: [userId], references: [id])
   market Market? @relation(fields: [marketId], references: [id])
+
+  @@index([userId, createdAt])
 }
 
 model Leaderboard {
@@ -215,6 +307,8 @@ model Comment {
   market  Market    @relation(fields: [marketId], references: [id])
   parent  Comment?  @relation("CommentReplies", fields: [parentCommentId], references: [id])
   replies Comment[] @relation("CommentReplies")
+
+  @@index([marketId])
 }
 
 model UserFollower {
@@ -263,6 +357,27 @@ model Notification {
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model NotificationBroadcast {
+  id             String          @id @default(uuid()) @db.Uuid
+  title          String
+  message        String
+  target         BroadcastTarget @default(ALL)
+  targetUserId   String?         @db.Uuid
+  createdById    String          @db.Uuid
+  scheduledFor   DateTime?
+  sentAt         DateTime?
+  status         BroadcastStatus @default(SCHEDULED)
+  recipientCount Int             @default(0)
+  createdAt      DateTime        @default(now())
+
+  createdBy User @relation("BroadcastCreator", fields: [createdById], references: [id])
+
+  @@index([status, scheduledFor])
 }
 
 model AuditLog {
@@ -273,4 +388,74 @@ model AuditLog {
   entityId   String?  @db.Uuid
   changes    Json?
   createdAt  DateTime @default(now())
+
+  admin User @relation("AdminAuditLogs", fields: [adminId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model MarketResolution {
+  id               String   @id @default(uuid()) @db.Uuid
+  marketId         String   @unique @db.Uuid
+  sourceUrl        String
+  evidenceUrl      String?
+  notes            String
+  resolvedByUserId String   @db.Uuid
+  winningOptionId  String   @db.Uuid
+  resolvedAt       DateTime @default(now())
+
+  market     Market @relation(fields: [marketId], references: [id])
+  resolvedBy User   @relation(fields: [resolvedByUserId], references: [id])
+}
+
+model Dispute {
+  id             String        @id @default(uuid()) @db.Uuid
+  marketId       String        @db.Uuid
+  raisedByUserId String        @db.Uuid
+  reason         String
+  evidenceUrl    String?
+  status         DisputeStatus @default(OPEN)
+  adminNotes     String?
+  createdAt      DateTime      @default(now())
+  resolvedAt     DateTime?
+
+  market   Market @relation(fields: [marketId], references: [id])
+  raisedBy User   @relation("DisputeRaiser", fields: [raisedByUserId], references: [id])
+
+  @@index([marketId, status])
+}
+
+model FraudFlag {
+  id         String          @id @default(uuid()) @db.Uuid
+  userId     String          @db.Uuid
+  marketId   String?         @db.Uuid
+  type       FraudFlagType
+  severity   Int             @default(1)
+  details    Json?
+  status     FraudFlagStatus @default(OPEN)
+  createdAt  DateTime        @default(now())
+  reviewedAt DateTime?
+
+  user   User    @relation(fields: [userId], references: [id])
+  market Market? @relation(fields: [marketId], references: [id])
+
+  @@index([status])
+  @@index([userId])
+}
+
+model Referral {
+  id           String         @id @default(uuid()) @db.Uuid
+  referrerId   String         @db.Uuid
+  refereeId    String         @unique @db.Uuid
+  code         String
+  status       ReferralStatus @default(PENDING)
+  rewardAmount Decimal?
+  createdAt    DateTime       @default(now())
+  completedAt  DateTime?
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id])
+  referee  User @relation("Referee", fields: [refereeId], references: [id])
+
+  @@index([referrerId])
 }

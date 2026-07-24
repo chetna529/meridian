@@ -1,40 +1,47 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const positionService = require('../services/positionService');
 
 exports.getPortfolio = async (req, res) => {
   try {
     const userId = req.user?.userId;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        predictions: { include: { market: true, option: true } },
-        // include positions
-        // @ts-ignore
-        positions: true
-      }
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const positionsRaw = await prisma.position.findMany({
+      where: { userId },
+      include: { market: { select: { id: true, title: true, status: true, category: true } }, option: true },
+      orderBy: { createdAt: 'desc' },
     });
 
-    const predictions = user.predictions || [];
-    const positions = await prisma.position.findMany({ where: { userId }, include: { market: true } });
+    const enriched = positionsRaw.map(positionService.enrichPosition);
+    const open = enriched.filter((p) => p.status === 'OPEN');
+    const closed = enriched.filter((p) => p.status === 'CLOSED');
 
-    const active = predictions.filter(p => p.status === 'PENDING');
-    const won = predictions.filter(p => p.status === 'WON');
-    const lost = predictions.filter(p => p.status === 'LOST');
+    const unrealizedPnl = open.reduce((sum, p) => sum + p.pnl, 0);
+    const realizedPnl = closed.reduce((sum, p) => sum + p.pnl, 0);
+    const totalCostBasis = enriched.reduce((sum, p) => sum + Number(p.costBasis), 0);
+    const roi = totalCostBasis > 0 ? ((unrealizedPnl + realizedPnl) / totalCostBasis) * 100 : 0;
+
+    const totalPredictions = await prisma.prediction.count({ where: { userId } });
+    const wonPredictions = await prisma.prediction.count({ where: { userId, status: 'WON' } });
+    const lostPredictions = await prisma.prediction.count({ where: { userId, status: 'LOST' } });
+    const resolvedCount = wonPredictions + lostPredictions;
 
     res.json({
       user: { username: user.username, avatar: user.avatarUrl, level: user.level, xpPoints: user.xpPoints },
       balance: { available: user.totalBalance, invested: user.investedBalance, total: Number(user.totalBalance) + Number(user.investedBalance) },
       stats: {
-        totalPredictions: user.totalPredictions || predictions.length,
-        activePredictions: active.length,
-        wonPredictions: won.length,
-        lostPredictions: lost.length,
-        winRate: user.totalPredictions > 0 ? ((won.length / user.totalPredictions) * 100).toFixed(1) : 0
+        totalPredictions,
+        activePredictions: open.length,
+        wonPredictions,
+        lostPredictions,
+        winRate: resolvedCount > 0 ? ((wonPredictions / resolvedCount) * 100).toFixed(1) : '0.0',
+        unrealizedPnl,
+        realizedPnl,
+        roi: roi.toFixed(2),
       },
-      predictions: { active, won: won.slice(0,5), lost: lost.slice(0,5) },
-      positions
+      positions: { open, closed },
     });
   } catch (err) {
     console.error(err);

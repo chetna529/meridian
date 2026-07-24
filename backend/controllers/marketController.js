@@ -4,25 +4,25 @@ const { checkBadges } = require('../lib/gamification');
 const { sendEmail } = require('../lib/email');
 
 const cache = require('../lib/cache');
-const pricing = require('../lib/pricingService');
+const eventBus = require('../lib/eventBus');
+const walletService = require('../services/walletService');
+const positionService = require('../services/positionService');
+const auditLog = require('../lib/auditLog');
+const lifecycle = require('../services/marketLifecycle');
 
-const adminOnly = (req, res) => {
-  if (req.user?.username !== 'admin') {
-    res.status(403).json({ error: 'Admin access required' });
-    return false;
-  }
-  return true;
-};
+function optionPercentage(option, optionCount) {
+  return option.currentOdds != null ? Number(option.currentOdds) : 100 / Math.max(optionCount, 1);
+}
 
 // Get all markets
-
 exports.getMarkets = async (req, res) => {
   try {
     const { category, status } = req.query;
-    
+
     let filter = {};
     if (category) filter.category = category;
-    if (status) filter.status = status;
+    filter.status = status || { in: ['LIVE', 'LOCKED', 'RESOLVING', 'RESOLVED'] };
+
     const cacheKey = `markets:${category || 'all'}:${status || 'all'}`;
     const cached = await cache.get(cacheKey);
     if (cached) return res.json(cached);
@@ -31,25 +31,19 @@ exports.getMarkets = async (req, res) => {
       where: filter,
       orderBy: { createdAt: 'desc' },
       include: {
-        options: {
-          include: {
-            _count: { select: { predictions: true } }
-          }
-        },
-        comments: { take: 3 }
-      }
+        options: { include: { _count: { select: { predictions: true } } } },
+        comments: { take: 3 },
+      },
     });
 
-    // enrich with computed odds using pricing service
-    const enriched = markets.map(m => {
-      const total = m.options.reduce((s, o) => s + Number(o.totalStaked || 0), 0) || 1;
-      const options = m.options.map(o => ({
+    const enriched = markets.map((m) => {
+      const options = m.options.map((o) => ({
         ...o,
-        percentage: pricing.computeOdds(total, o.totalStaked),
-        predictionCount: o._count?.predictions || 0
+        percentage: optionPercentage(o, m.options.length),
+        predictionCount: o._count?.predictions || 0,
       }));
       const totalVotes = options.reduce((sum, opt) => sum + opt.predictionCount, 0);
-      return { ...m, options, totalVotes, totalVolume: total };
+      return { ...m, options, totalVotes };
     });
 
     await cache.set(cacheKey, enriched, 30);
@@ -70,37 +64,25 @@ exports.getMarket = async (req, res) => {
     const market = await prisma.market.findUnique({
       where: { id: req.params.id },
       include: {
-        options: {
-          include: {
-            predictions: {
-              select: { amountStaked: true }
-            }
-          }
-        },
+        options: true,
         comments: {
-          include: {
-            user: {
-              select: { username: true, avatarUrl: true }
-            }
-          },
+          include: { user: { select: { username: true, avatarUrl: true } } },
           take: 10,
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: 'desc' },
         },
-        predictions: {
-          where: { userId: req.user?.userId },
-          include: { option: true }
-        }
-      }
+        predictions: { where: { userId: req.user?.userId }, include: { option: true } },
+        resolution: { include: { resolvedBy: { select: { username: true } } } },
+        disputes: { orderBy: { createdAt: 'desc' }, take: 10 },
+      },
     });
     if (!market) return res.status(404).json({ error: 'Market not found' });
-    // calculate odds
-    const totalStaked = market.options.reduce((sum, opt) => sum + opt.predictions.reduce((s, pred) => s + Number(pred.amountStaked), 0), 0);
-    const optionsWithOdds = market.options.map((opt) => {
-      const optionTotal = opt.predictions.reduce((s, pred) => s + Number(pred.amountStaked), 0);
-      return { ...opt, percentage: totalStaked > 0 ? (optionTotal / totalStaked) * 100 : 50, volume: optionTotal };
-    });
 
-    const out = { ...market, options: optionsWithOdds, totalVolume: totalStaked, userPredictions: market.predictions };
+    const options = market.options.map((opt) => ({
+      ...opt,
+      percentage: optionPercentage(opt, market.options.length),
+    }));
+
+    const out = { ...market, options, userPredictions: market.predictions };
     await cache.set(cacheKey, out, 30);
     res.json(out);
   } catch (error) {
@@ -109,31 +91,48 @@ exports.getMarket = async (req, res) => {
   }
 };
 
-// Admin: Create market
+// Admin: create a market (starts as DRAFT, or PENDING_APPROVAL if submitted for review)
 exports.createMarket = async (req, res) => {
-  if (!adminOnly(req, res)) return;
-
   try {
-    const { title, description, category, resolutionDate, resolutionCriteria, imageUrl, options } = req.body;
-    
-    const market = await prisma.market.create({
-      data: {
-        title,
-        description,
-        category,
-        resolutionDate: new Date(resolutionDate),
-        resolutionCriteria,
-        imageUrl,
-        creatorId: req.user.userId,
-        status: 'LIVE',
-        options: {
-          create: options || [
-            { optionText: 'YES' },
-            { optionText: 'NO' }
-          ]
-        }
-      },
-      include: { options: true }
+    const { title, description, category, resolutionDate, resolutionCriteria, imageUrl, options, liquidityParam, submit } = req.body;
+
+    if (!title || title.trim().length < 8) return res.status(400).json({ error: 'Title must be at least 8 characters' });
+    if (!description || description.trim().length < 20) return res.status(400).json({ error: 'Description must be at least 20 characters' });
+    if (!resolutionCriteria || resolutionCriteria.trim().length < 10) return res.status(400).json({ error: 'Resolution criteria must be at least 10 characters' });
+    if (resolutionDate && new Date(resolutionDate).getTime() <= Date.now()) return res.status(400).json({ error: 'Resolution date must be in the future' });
+    const cleanOptions = (options || []).map((o) => ({ optionText: String(o.optionText || '').trim() })).filter((o) => o.optionText);
+    const finalOptions = cleanOptions.length >= 2 ? cleanOptions : [{ optionText: 'YES' }, { optionText: 'NO' }];
+    if (new Set(finalOptions.map((o) => o.optionText.toUpperCase())).size !== finalOptions.length) {
+      return res.status(400).json({ error: 'Option labels must be unique' });
+    }
+    if (liquidityParam !== undefined && Number(liquidityParam) <= 0) return res.status(400).json({ error: 'Liquidity must be a positive number' });
+
+    const market = await prisma.$transaction(async (tx) => {
+      const created = await tx.market.create({
+        data: {
+          title,
+          description,
+          category,
+          resolutionDate: resolutionDate ? new Date(resolutionDate) : null,
+          resolutionCriteria,
+          imageUrl,
+          liquidityParam: liquidityParam || 100,
+          creatorId: req.user.userId,
+          status: submit ? 'PENDING_APPROVAL' : 'DRAFT',
+          options: { create: finalOptions },
+        },
+        include: { options: true },
+      });
+
+      await auditLog.record(tx, {
+        adminId: req.user.userId,
+        action: 'CREATE_MARKET',
+        entityType: 'Market',
+        entityId: created.id,
+        changes: { title, category, status: created.status },
+      });
+
+      return created;
     });
 
     res.status(201).json(market);
@@ -143,123 +142,180 @@ exports.createMarket = async (req, res) => {
   }
 };
 
-// Admin: Resolve a market
-exports.resolveMarket = async (req, res) => {
-  if (!adminOnly(req, res)) return;
-
+async function transitionMarket(req, res, { to, extraData = {}, action }) {
   try {
     const { id } = req.params;
-    const { winningOptionId } = req.body;
+    const market = await prisma.market.findUnique({ where: { id } });
+    if (!market) return res.status(404).json({ error: 'Market not found' });
 
-    const market = await prisma.market.findUnique({
-      where: { id },
-      include: { options: true }
+    lifecycle.assertTransition(market.status, to);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.market.update({ where: { id }, data: { status: to, ...extraData } });
+      await auditLog.record(tx, {
+        adminId: req.user.userId,
+        action,
+        entityType: 'Market',
+        entityId: id,
+        changes: { from: market.status, to },
+      });
+      return result;
     });
 
-    if (!market || !['LIVE', 'LOCKED'].includes(market.status)) {
-      return res.status(400).json({ error: 'Market is not available for resolution' });
+    await cache.del(`market:${id}`);
+    if (to === 'LOCKED') eventBus.publish('MarketLocked', { marketId: id, title: market.title });
+
+    res.json(updated);
+  } catch (error) {
+    console.error(`Error transitioning market (${action}):`, error);
+    res.status(400).json({ error: error.message || 'Failed to update market status' });
+  }
+}
+
+// Admin: schedule an automatic publish (DRAFT/PENDING_APPROVAL -> LIVE) at a future time
+exports.schedulePublish = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { publishAt } = req.body;
+    const publishDate = new Date(publishAt);
+    if (!publishAt || publishDate.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'publishAt must be a valid future date/time' });
     }
 
-    const winningOption = market.options.find(o => o.id === winningOptionId);
+    const market = await prisma.market.findUnique({ where: { id } });
+    if (!market) return res.status(404).json({ error: 'Market not found' });
+    if (!['DRAFT', 'PENDING_APPROVAL'].includes(market.status)) {
+      return res.status(400).json({ error: 'Only DRAFT or PENDING_APPROVAL markets can be scheduled' });
+    }
+
+    const { marketPublishQueue } = require('../jobs/marketPublishJob');
+    await marketPublishQueue.add('publish', { marketId: id, adminId: req.user.userId }, { delay: publishDate.getTime() - Date.now() });
+
+    await auditLog.record(prisma, {
+      adminId: req.user.userId,
+      action: 'SCHEDULE_MARKET_PUBLISH',
+      entityType: 'Market',
+      entityId: id,
+      changes: { publishAt: publishDate },
+    });
+
+    res.json({ message: 'Publish scheduled', publishAt: publishDate });
+  } catch (error) {
+    console.error('Error scheduling publish:', error);
+    res.status(500).json({ error: 'Failed to schedule publish' });
+  }
+};
+
+exports.submitForReview = (req, res) => transitionMarket(req, res, { to: 'PENDING_APPROVAL', action: 'SUBMIT_MARKET_FOR_REVIEW' });
+exports.approveMarket = (req, res) => transitionMarket(req, res, { to: 'LIVE', action: 'APPROVE_MARKET' });
+exports.lockMarket = (req, res) => transitionMarket(req, res, { to: 'LOCKED', action: 'LOCK_MARKET' });
+exports.startResolving = (req, res) => transitionMarket(req, res, { to: 'RESOLVING', action: 'START_RESOLVING_MARKET' });
+exports.cancelMarket = (req, res) => transitionMarket(req, res, { to: 'CANCELLED', action: 'CANCEL_MARKET' });
+exports.archiveMarket = (req, res) => transitionMarket(req, res, { to: 'ARCHIVED', action: 'ARCHIVE_MARKET' });
+
+// Admin: resolve a market with required evidence (sourceUrl + notes)
+exports.resolveMarket = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { winningOptionId, sourceUrl, evidenceUrl, notes } = req.body;
+
+    if (!sourceUrl || !notes) {
+      return res.status(400).json({ error: 'A resolution source and notes are required to resolve a market' });
+    }
+
+    const market = await prisma.market.findUnique({ where: { id }, include: { options: true } });
+    if (!market || !['LOCKED', 'RESOLVING'].includes(market.status)) {
+      return res.status(400).json({ error: 'Market must be LOCKED or RESOLVING to resolve' });
+    }
+
+    const winningOption = market.options.find((o) => o.id === winningOptionId);
     if (!winningOption) return res.status(400).json({ error: 'Invalid winning option' });
 
-    // Use transaction to resolve market and distribute payouts
     await prisma.$transaction(async (tx) => {
-      // 1. Update Market
-      await tx.market.update({
-        where: { id },
-        data: {
-          status: 'RESOLVED',
-          resolvedDate: new Date()
-        }
+      if (market.status === 'LOCKED') {
+        lifecycle.assertTransition('LOCKED', 'RESOLVING');
+      }
+      lifecycle.assertTransition('RESOLVING', 'RESOLVED');
+
+      await tx.market.update({ where: { id }, data: { status: 'RESOLVED', resolvedDate: new Date() } });
+
+      await tx.marketResolution.create({
+        data: { marketId: id, sourceUrl, evidenceUrl, notes, resolvedByUserId: req.user.userId, winningOptionId },
       });
 
-      // 2. Fetch winning predictions
-      const winningPredictions = await tx.prediction.findMany({
-        where: { marketId: id, optionId: winningOptionId, status: 'PENDING' }
-      });
+      const allPending = await tx.prediction.findMany({ where: { marketId: id, status: 'PENDING' } });
 
-      // 3. Process payouts
-      for (const pred of winningPredictions) {
-        const payout = Number(pred.potentialReturn);
-        
-        await tx.user.update({
-          where: { id: pred.userId },
-          data: { totalBalance: { increment: payout } }
-        });
+      for (const pred of allPending) {
+        const isWinner = pred.optionId === winningOptionId;
+        const payout = isWinner ? Number(pred.potentialReturn) : 0;
 
-        await tx.prediction.update({
-          where: { id: pred.id },
-          data: { status: 'WON', resolvedAt: new Date() }
-        });
-
-        await tx.transaction.create({
-          data: {
+        if (isWinner) {
+          await walletService.credit(tx, {
             userId: pred.userId,
-            type: 'PAYOUT',
-            amount: payout,
-            reason: `Payout for winning market: ${market.title}`,
-            marketId: id,
-            balanceAfter: payout // Simplified for MVP
-          }
-        });
-
-        // Wallet ledger entry for payout
-        await tx.walletLedger.create({
-          data: {
-            userId: pred.userId,
-            type: 'CREDIT',
             subType: 'PAYOUT',
             amount: payout,
-            balanceBefore: 0,
-            balanceAfter: payout,
             referenceId: pred.id,
-            metadata: { marketId: id }
-          }
-        });
+            metadata: { marketId: id },
+          });
+        }
 
-        // Create Notification
+        await tx.user.update({ where: { id: pred.userId }, data: { investedBalance: { decrement: Number(pred.amountStaked) } } });
+
+        await tx.prediction.update({ where: { id: pred.id }, data: { status: isWinner ? 'WON' : 'LOST', resolvedAt: new Date() } });
+
+        if (isWinner) {
+          await tx.transaction.create({
+            data: { userId: pred.userId, type: 'PAYOUT', amount: payout, reason: `Payout for winning market: ${market.title}`, marketId: id, balanceAfter: payout },
+          });
+        }
+
         await tx.notification.create({
           data: {
             userId: pred.userId,
-            type: 'MARKET_WON',
-            title: 'Prediction Won!',
-            message: `You won $${payout.toLocaleString()} from ${market.title}!`,
-          }
+            type: isWinner ? 'MARKET_WON' : 'MARKET_LOST',
+            title: isWinner ? 'Prediction Won!' : 'Prediction Resolved',
+            message: isWinner
+              ? `You won ${payout.toLocaleString()} points from ${market.title}!`
+              : `${market.title} has resolved. Your stake of ${Number(pred.amountStaked).toLocaleString()} was not returned.`,
+          },
         });
 
-        // Gamification badge check
-        await checkBadges(tx, pred.userId);
+        if (isWinner) await checkBadges(tx, pred.userId);
       }
 
-      // 4. Update losing predictions
-      await tx.prediction.updateMany({
-        where: { marketId: id, status: 'PENDING', optionId: { not: winningOptionId } },
-        data: { status: 'LOST', resolvedAt: new Date() }
+      const finalPriceByOptionId = Object.fromEntries(market.options.map((o) => [o.id, o.id === winningOptionId ? 1 : 0]));
+      await positionService.closePositionsForMarket(tx, id, finalPriceByOptionId);
+
+      await auditLog.record(tx, {
+        adminId: req.user.userId,
+        action: 'RESOLVE_MARKET',
+        entityType: 'Market',
+        entityId: id,
+        changes: { winningOptionId, sourceUrl },
       });
     });
 
-    // Send emails to the prediction owners in background
-    prisma.prediction.findMany({
-      where: { marketId: id },
-      include: { user: true }
-    }).then(predictions => {
-      for (const pred of predictions) {
-        const isWon = pred.status === 'WON';
-        const payout = Number(pred.potentialReturn || 0);
-        const subject = isWon ? 'You won your prediction! 🎉' : 'Prediction resolved';
-        const html = `
-          <h2>Market resolved: ${market.title}</h2>
-          <p>Hi ${pred.user.username},</p>
-          <p>Your prediction status: <strong>${pred.status}</strong></p>
-          ${isWon ? `<p>You have earned <strong>${payout.toLocaleString()} points</strong>!</p>` : `<p>Your stake of ${Number(pred.amountStaked)} was lost.</p>`}
-          <p>Thank you for participating!</p>
-        `;
-        sendEmail(pred.user.email, subject, html).catch(err => console.error(err));
-      }
-    }).catch(err => console.error('Failed to trigger resolution emails:', err));
+    eventBus.publish('MarketResolved', { marketId: id, title: market.title, winningOptionId });
 
-    // Invalidate caches for this market and markets list
+    prisma.prediction
+      .findMany({ where: { marketId: id }, include: { user: true } })
+      .then((predictions) => {
+        for (const pred of predictions) {
+          const isWon = pred.status === 'WON';
+          const payout = Number(pred.potentialReturn || 0);
+          const subject = isWon ? 'You won your prediction! 🎉' : 'Prediction resolved';
+          const html = `
+            <h2>Market resolved: ${market.title}</h2>
+            <p>Hi ${pred.user.username},</p>
+            <p>Your prediction status: <strong>${pred.status}</strong></p>
+            ${isWon ? `<p>You have earned <strong>${payout.toLocaleString()} points</strong>!</p>` : `<p>Your stake of ${Number(pred.amountStaked)} was lost.</p>`}
+            <p>Thank you for participating!</p>
+          `;
+          sendEmail(pred.user.email, subject, html).catch((err) => console.error(err));
+        }
+      })
+      .catch((err) => console.error('Failed to trigger resolution emails:', err));
+
     try {
       await cache.del(`market:${id}`);
       await cache.del('markets:all:all');
@@ -275,14 +331,15 @@ exports.resolveMarket = async (req, res) => {
 };
 
 exports.deleteMarket = async (req, res) => {
-  if (!adminOnly(req, res)) return;
-
   try {
     const { id } = req.params;
     const market = await prisma.market.findUnique({ where: { id } });
     if (!market) return res.status(404).json({ error: 'Market not found' });
 
     await prisma.$transaction(async (tx) => {
+      await tx.dispute.deleteMany({ where: { marketId: id } });
+      await tx.fraudFlag.deleteMany({ where: { marketId: id } });
+      await tx.marketResolution.deleteMany({ where: { marketId: id } });
       await tx.comment.deleteMany({ where: { marketId: id } });
       await tx.position.deleteMany({ where: { marketId: id } });
       await tx.prediction.deleteMany({ where: { marketId: id } });
@@ -291,6 +348,14 @@ exports.deleteMarket = async (req, res) => {
       await tx.marketAnalytics.deleteMany({ where: { marketId: id } });
       await tx.marketOption.deleteMany({ where: { marketId: id } });
       await tx.market.delete({ where: { id } });
+
+      await auditLog.record(tx, {
+        adminId: req.user.userId,
+        action: 'DELETE_MARKET',
+        entityType: 'Market',
+        entityId: id,
+        changes: { title: market.title },
+      });
     });
 
     res.json({ message: 'Market deleted successfully' });
@@ -300,7 +365,6 @@ exports.deleteMarket = async (req, res) => {
   }
 };
 
-// Add a comment
 // Add a comment (supports replies)
 exports.addComment = async (req, res) => {
   try {
@@ -309,14 +373,25 @@ exports.addComment = async (req, res) => {
     const userId = req.user.userId;
 
     const comment = await prisma.comment.create({
-      data: {
-        marketId: id,
-        userId,
-        text,
-        parentCommentId: parentCommentId || null
-      },
-      include: { user: { select: { username: true, avatarUrl: true } } }
+      data: { marketId: id, userId, text, parentCommentId: parentCommentId || null },
+      include: { user: { select: { username: true, avatarUrl: true } } },
     });
+
+    if (parentCommentId) {
+      const parent = await prisma.comment.findUnique({ where: { id: parentCommentId } });
+      if (parent && parent.userId !== userId) {
+        const notification = await prisma.notification.create({
+          data: {
+            userId: parent.userId,
+            type: 'COMMENT_REPLY',
+            title: 'New reply',
+            message: `${comment.user.username} replied to your comment`,
+            data: { marketId: id, commentId: comment.id },
+          },
+        });
+        eventBus.publish('NotificationCreated', { ...notification, userId: parent.userId });
+      }
+    }
 
     res.status(201).json(comment);
   } catch (error) {
@@ -329,22 +404,16 @@ exports.addComment = async (req, res) => {
 exports.getComments = async (req, res) => {
   try {
     const { id } = req.params;
-    // Get top-level comments first
     const comments = await prisma.comment.findMany({
       where: { marketId: id, parentCommentId: null },
       include: {
         user: { select: { username: true, avatarUrl: true, reputationScore: true } },
         replies: {
-          include: {
-            user: { select: { username: true, avatarUrl: true, reputationScore: true } }
-          },
-          orderBy: { createdAt: 'asc' }
-        }
+          include: { user: { select: { username: true, avatarUrl: true, reputationScore: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
-      orderBy: [
-        { pinned: 'desc' },
-        { createdAt: 'desc' }
-      ]
+      orderBy: [{ pinned: 'desc' }, { createdAt: 'desc' }],
     });
     res.json(comments);
   } catch (error) {
@@ -357,30 +426,66 @@ exports.getComments = async (req, res) => {
 exports.reactToComment = async (req, res) => {
   try {
     const { commentId } = req.params;
-    const { reaction } = req.body; // e.g. "LIKE", "FIRE", "ROCKET", "100"
+    const { reaction } = req.body;
 
     const comment = await prisma.comment.findUnique({ where: { id: commentId } });
     if (!comment) return res.status(404).json({ error: 'Comment not found' });
 
     let currentReactions = comment.reactions || {};
-    if (typeof currentReactions === 'string') {
-      currentReactions = JSON.parse(currentReactions);
-    }
-    
+    if (typeof currentReactions === 'string') currentReactions = JSON.parse(currentReactions);
     currentReactions[reaction] = (currentReactions[reaction] || 0) + 1;
 
     const updated = await prisma.comment.update({
       where: { id: commentId },
-      data: {
-        reactions: currentReactions,
-        likes: reaction === 'LIKE' ? comment.likes + 1 : comment.likes
-      }
+      data: { reactions: currentReactions, likes: reaction === 'LIKE' ? comment.likes + 1 : comment.likes },
     });
 
     res.json(updated);
   } catch (error) {
     console.error('Error reacting to comment:', error);
     res.status(500).json({ error: 'Failed to react to comment' });
+  }
+};
+
+// GET /api/markets/:id/price-history?range=1h|24h|7d|30d
+exports.getPriceHistory = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const range = req.query.range || '24h';
+    const rangeMs = { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 }[range] || 86400e3;
+    const since = new Date(Date.now() - rangeMs);
+
+    const points = await prisma.marketPriceHistory.findMany({
+      where: { marketId: id, recordedAt: { gte: since } },
+      orderBy: { recordedAt: 'asc' },
+      include: { market: false },
+    });
+
+    const options = await prisma.marketOption.findMany({ where: { marketId: id } });
+    const byOption = {};
+    for (const opt of options) byOption[opt.id] = { optionText: opt.optionText, points: [] };
+    for (const p of points) {
+      if (p.optionId && byOption[p.optionId]) {
+        byOption[p.optionId].points.push({ price: Number(p.price), recordedAt: p.recordedAt });
+      }
+    }
+
+    res.json(byOption);
+  } catch (error) {
+    console.error('Error fetching price history:', error);
+    res.status(500).json({ error: 'Failed to fetch price history' });
+  }
+};
+
+// GET /api/markets/:id/analytics
+exports.getAnalytics = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const analytics = await prisma.marketAnalytics.findFirst({ where: { marketId: id }, orderBy: { computedAt: 'desc' } });
+    res.json(analytics || { marketId: id, volume24h: 0, volume7d: 0, tradersCount: 0, liquidity: 0, priceMove24h: 0 });
+  } catch (error) {
+    console.error('Error fetching market analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch market analytics' });
   }
 };
 
@@ -394,28 +499,18 @@ exports.fetchRealMarketData = async (req, res) => {
     let fetchedData = null;
     let type = 'NONE';
 
-    // 1. Weather Market Integration
     if (market.category.toUpperCase().includes('WEATHER') || market.title.toLowerCase().includes('weather') || market.title.toLowerCase().includes('temperature')) {
       type = 'WEATHER';
       const apiKey = process.env.OPENWEATHER_API_KEY;
       if (apiKey) {
-        // Default to London or extract city name
         const city = market.title.toLowerCase().includes('london') ? 'London' : 'New York';
         const response = await fetch(`https://api.openweathermap.org/data/2.5/weather?q=${city}&units=metric&appid=${apiKey}`);
         const data = await response.json();
         if (data.main) {
-          fetchedData = {
-            temperature: data.main.temp,
-            humidity: data.main.humidity,
-            weather: data.weather[0]?.main,
-            city,
-            updatedAt: new Date()
-          };
+          fetchedData = { temperature: data.main.temp, humidity: data.main.humidity, weather: data.weather[0]?.main, city, updatedAt: new Date() };
         }
       }
-    } 
-    // 2. Stock / Finance Market Integration
-    else if (market.category.toUpperCase().includes('FINANCE') || market.category.toUpperCase().includes('STOCK') || market.title.toLowerCase().includes('apple') || market.title.toLowerCase().includes('tesla')) {
+    } else if (market.category.toUpperCase().includes('FINANCE') || market.category.toUpperCase().includes('STOCK') || market.title.toLowerCase().includes('apple') || market.title.toLowerCase().includes('tesla')) {
       type = 'STOCK';
       const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
       if (apiKey) {
@@ -424,24 +519,15 @@ exports.fetchRealMarketData = async (req, res) => {
         const data = await response.json();
         const quote = data['Global Quote'];
         if (quote) {
-          fetchedData = {
-            symbol,
-            price: Number(quote['05. price']),
-            volume: Number(quote['06. volume']),
-            change: quote['09. change'],
-            updatedAt: new Date()
-          };
+          fetchedData = { symbol, price: Number(quote['05. price']), volume: Number(quote['06. volume']), change: quote['09. change'], updatedAt: new Date() };
         }
       }
     }
 
     if (fetchedData) {
-      // Update market volume or liquidity pool based on real data activity
       const updatedMarket = await prisma.market.update({
         where: { id },
-        data: {
-          liquidityPool: type === 'STOCK' ? fetchedData.price : market.liquidityPool
-        }
+        data: { liquidityPool: type === 'STOCK' ? fetchedData.price : market.liquidityPool },
       });
       return res.json({ success: true, type, data: fetchedData, market: updatedMarket });
     }

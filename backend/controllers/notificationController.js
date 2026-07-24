@@ -3,11 +3,16 @@ const prisma = new PrismaClient();
 
 exports.getNotifications = async (req, res) => {
   try {
+    const { cursor, take } = req.query;
+    const pageSize = Math.min(Number(take) || 20, 100);
+
     const notifications = await prisma.notification.findMany({
       where: { userId: req.user.userId },
       orderBy: { createdAt: 'desc' },
-      take: 20
+      take: pageSize,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
     });
+
     res.json(notifications);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch notifications' });

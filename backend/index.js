@@ -6,12 +6,14 @@ const helmet = require('helmet');
 const http = require('http');
 const { Server } = require('socket.io');
 const { PrismaClient } = require('@prisma/client');
+const logger = require('./lib/logger');
+const { metricsMiddleware, metricsHandler } = require('./lib/metrics');
 
 const prisma = new PrismaClient();
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
+  cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 
 const PORT = process.env.PORT || 5000;
@@ -20,6 +22,7 @@ app.set('io', io);
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
+app.use(metricsMiddleware);
 
 const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 10 });
 const apiLimiter = rateLimit({ windowMs: 60 * 1000, max: 60 });
@@ -30,10 +33,18 @@ app.use('/api/predictions', apiLimiter);
 require('./jobs/leaderboardJob');
 require('./jobs/marketExpiryJob');
 require('./jobs/settlementJob');
+require('./jobs/analyticsJob');
+require('./jobs/fraudScanJob');
+require('./jobs/notifyLockingSoonJob');
+require('./jobs/notificationBroadcastJob');
+require('./jobs/marketPublishJob');
+const { startScheduler } = require('./jobs/scheduler');
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
 });
+
+app.get('/metrics', metricsHandler);
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/markets', require('./routes/markets'));
@@ -45,12 +56,21 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/positions', require('./routes/positions'));
 app.use('/api/portfolio', require('./routes/portfolio'));
 app.use('/api/transactions', require('./routes/transactions'));
+app.use('/api/wallet', require('./routes/wallet'));
+app.use('/api/admin', require('./routes/admin'));
+app.use('/api/stats', require('./routes/stats'));
 
 const { registerSocketHandlers } = require('./websocket/handler');
 registerSocketHandlers(io);
 
+const eventBus = require('./lib/eventBus');
+const { registerEventHandlers } = require('./events/handlers');
+eventBus.start().then(() => registerEventHandlers(io));
+startScheduler();
+
+// Start HTTP and WebSocket server
 server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  logger.info(`Server is running on port ${PORT}`);
 });
 
 app.get('/health/ready', async (req, res) => {

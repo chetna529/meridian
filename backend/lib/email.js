@@ -1,27 +1,34 @@
 const sendEmail = async (to, subject, html) => {
-  const apiKey = process.env.RESEND_API_KEY;
+  const apiKey = process.env.BREVO_API_KEY;
   if (!apiKey) {
-    console.log('Skipping email send: RESEND_API_KEY not configured.');
+    console.log('Skipping email send: BREVO_API_KEY not configured.');
     return;
   }
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || 'info@meridian.com';
+  const senderName = process.env.BREVO_SENDER_NAME || 'Meridian';
+
   try {
-    const response = await fetch('https://api.resend.com/emails', {
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+        'accept': 'application/json'
       },
       body: JSON.stringify({
-        from: 'Meridian <onboarding@resend.dev>',
-        to: [to],
+        sender: {
+          name: senderName,
+          email: senderEmail
+        },
+        to: [{ email: to }],
         subject,
-        html
+        htmlContent: html
       })
     });
     const data = await response.json();
-    console.log('Resend Email Response:', data);
+    console.log('Brevo Email Response:', data);
   } catch (error) {
-    console.error('Error sending email via Resend:', error.message);
+    console.error('Error sending email via Brevo:', error.message);
   }
 };
 

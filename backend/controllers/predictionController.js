@@ -1,182 +1,140 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
-const { broadcastToFollowers } = require('../websocket/handler');
-const { checkBadges } = require('../lib/gamification');
+const pricing = require('../lib/pricingService');
+const eventBus = require('../lib/eventBus');
+const walletService = require('../services/walletService');
+const positionService = require('../services/positionService');
+const referralService = require('../services/referralService');
+const { checkBadges, addXP } = require('../lib/gamification');
+const fraudService = require('../services/fraudService');
 
-// Place a prediction (with Dynamic Odds AMM)
+// Place a prediction, priced via LMSR (see lib/pricingService.js)
 exports.placePrediction = async (req, res) => {
   try {
     const { marketId, optionId, amount } = req.body;
     const userId = req.user.userId;
+    const stake = Number(amount);
+
+    if (!stake || stake <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
+
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user.isEmailVerified) {
+      return res.status(400).json({ error: 'Please verify your email address to place predictions.' });
+    }
 
     const result = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.findUnique({ where: { id: userId } });
       const market = await tx.market.findUnique({ where: { id: marketId }, include: { options: true } });
-      const option = market?.options.find(o => o.id === optionId);
+      if (!market || market.status !== 'LIVE') throw new Error('Market not available for trading');
 
-      if (!user || Number(user.totalBalance) < Number(amount)) throw new Error('Insufficient balance');
-      if (!market || market.status !== 'LIVE') throw new Error('Market not available');
-      if (!option) throw new Error('Invalid option');
+      const orderedOptions = [...market.options].sort((a, b) => a.createdAt - b.createdAt);
+      const optionIndex = orderedOptions.findIndex((o) => o.id === optionId);
+      if (optionIndex === -1) throw new Error('Invalid option');
+      const option = orderedOptions[optionIndex];
 
-      // Update user
-      const updatedUser = await tx.user.update({
-        where: { id: userId },
-        data: {
-          totalBalance: { decrement: amount },
-          investedBalance: { increment: amount },
-          xpPoints: { increment: 10 }
-        }
+      const b = Number(market.liquidityParam);
+      const qBefore = orderedOptions.map((o) => Number(o.sharesOutstanding));
+      const shares = pricing.sharesForBudget(qBefore, optionIndex, stake, b);
+      if (!shares || shares <= 0) throw new Error('Trade too small to price');
+
+      const { user: userAfterDebit } = await walletService.debit(tx, {
+        userId,
+        subType: 'PREDICTION_STAKE',
+        amount: stake,
+        metadata: { marketId, optionId },
       });
 
-      // Level calculation logic
-      let newLevel = updatedUser.level;
-      if (updatedUser.xpPoints >= 5000) newLevel = 4;
-      else if (updatedUser.xpPoints >= 2000) newLevel = 3;
-      else if (updatedUser.xpPoints >= 500) newLevel = 2;
+      await tx.user.update({ where: { id: userId }, data: { investedBalance: { increment: stake } } });
 
-      if (newLevel > updatedUser.level) {
-        await tx.user.update({
-          where: { id: userId },
-          data: { level: newLevel, totalBalance: { increment: 500 } }
-        });
-        
-        await tx.notification.create({
-          data: {
-            userId,
-            type: 'LEVEL_UP',
-            title: 'Level Up! 🎉',
-            message: `You reached Level ${newLevel} and earned a 500 point bonus!`
-          }
-        });
-      }
-
-      // Update option
       await tx.marketOption.update({
         where: { id: optionId },
         data: {
-          totalStaked: { increment: amount },
-          predictionCount: { increment: 1 }
-        }
+          totalStaked: { increment: stake },
+          sharesOutstanding: { increment: shares },
+          predictionCount: { increment: 1 },
+        },
       });
 
-      // Recalculate odds (Simple AMM logic based on total staked proportions)
-      const optionsAfter = await tx.marketOption.findMany({ where: { marketId } });
-      const totalPool = optionsAfter.reduce((sum, opt) => sum + Number(opt.totalStaked), 0);
-      
-      let yesPercentage = 50, noPercentage = 50;
-      if (totalPool > 0) {
-        // Find the first option (typically YES) and the second (typically NO)
-        const opt1 = optionsAfter[0];
-        const opt2 = optionsAfter[1];
-        if (opt1 && opt2) {
-          const opt1Perc = (Number(opt1.totalStaked) / totalPool) * 100;
-          const opt2Perc = (Number(opt2.totalStaked) / totalPool) * 100;
-          
-          if (opt1.optionText.toUpperCase().includes('YES')) {
-            yesPercentage = opt1Perc;
-            noPercentage = opt2Perc;
-          } else {
-            yesPercentage = opt2Perc;
-            noPercentage = opt1Perc;
-          }
-        }
+      const qAfter = [...qBefore];
+      qAfter[optionIndex] += shares;
+      const pricesAfter = pricing.price(qAfter, b);
+
+      for (let i = 0; i < orderedOptions.length; i++) {
+        await tx.marketOption.update({
+          where: { id: orderedOptions[i].id },
+          data: { currentOdds: pricesAfter[i] * 100 },
+        });
+        await tx.marketPriceHistory.create({
+          data: { marketId, optionId: orderedOptions[i].id, price: pricesAfter[i] },
+        });
       }
 
-      // Update market
-      await tx.market.update({
+      const yesIdx = orderedOptions.findIndex((o) => o.optionText.toUpperCase().includes('YES'));
+      const noIdx = orderedOptions.findIndex((o) => o.optionText.toUpperCase().includes('NO'));
+      const yesPercentage = yesIdx !== -1 ? pricesAfter[yesIdx] * 100 : 50;
+      const noPercentage = noIdx !== -1 ? pricesAfter[noIdx] * 100 : 50;
+
+      const updatedMarket = await tx.market.update({
         where: { id: marketId },
-        data: {
-          totalVolume: { increment: amount },
-          totalPredictions: { increment: 1 },
-          yesPercentage,
-          noPercentage
-        }
+        data: { totalVolume: { increment: stake }, totalPredictions: { increment: 1 }, yesPercentage, noPercentage },
       });
 
-      // Calculate AMM-based potential return using pricing service
-      const pricing = require('../lib/pricingService');
-      const optionsAfterTotals = optionsAfter.map(o => Number(o.totalStaked));
-      const totalPoolAfter = optionsAfterTotals.reduce((s, v) => s + v, 0);
-      const optionTotal = Number(option.totalStaked) + Number(amount);
-      const multiplier = pricing.computeMultiplier(totalPoolAfter, optionTotal);
-
       const prediction = await tx.prediction.create({
-        data: {
-          userId,
-          marketId,
-          optionId,
-          amountStaked: amount,
-          potentialReturn: amount * multiplier,
-          status: 'PENDING'
-        }
+        data: { userId, marketId, optionId, amountStaked: stake, potentialReturn: shares, status: 'PENDING' },
       });
 
       await tx.transaction.create({
         data: {
           userId,
           type: 'BUY',
-          amount,
+          amount: stake,
           reason: `Placed prediction on market: ${market.title}`,
           marketId,
-          balanceAfter: Number(updatedUser.totalBalance)
-        }
+          balanceAfter: Number(userAfterDebit.totalBalance),
+        },
       });
 
-      // Create wallet ledger entry for audit-grade balance tracking
-      await tx.walletLedger.create({
-        data: {
-          userId,
-          type: 'DEBIT',
-          subType: 'PREDICTION_STAKE',
-          amount,
-          balanceBefore: user.totalBalance,
-          balanceAfter: Number(updatedUser.totalBalance),
-          referenceId: '',
-          metadata: { marketId, optionId }
-        }
+      await positionService.upsertPositionOnTrade(tx, {
+        userId,
+        marketId,
+        optionId,
+        shares,
+        cost: stake,
+        entryPrice: stake / shares,
       });
 
-      // Create a Position record to track user's open position
-      await tx.position.create({
-        data: {
-          userId,
-          marketId,
-          optionId,
-          shares: amount,
-          entryPrice: Number(multiplier),
-        }
-      });
-
-      // Gamification check
+      await addXP(tx, userId, 10);
       await checkBadges(tx, userId);
+      await referralService.completeReferralOnFirstTrade(tx, userId);
 
-      // Returning data out of transaction
-      return { prediction, userBalance: updatedUser.totalBalance, yesPercentage, noPercentage, totalVolume: market.totalVolume + amount };
+      const user = await tx.user.findUnique({ where: { id: userId } });
+
+      return {
+        prediction,
+        yesPercentage,
+        noPercentage,
+        totalVolume: updatedMarket.totalVolume,
+        userBalance: user.totalBalance,
+        optionText: option.optionText,
+        prices: orderedOptions.reduce((acc, o, i) => ({ ...acc, [o.id]: pricesAfter[i] }), {}),
+      };
     });
 
-    // EMIT SOCKET EVENT for real-time updates!
     const io = req.app.get('io');
     if (io) {
-      // Broadcast to specific market room
-      io.to(`market:${marketId}`).emit('odds-updated', {
-        marketId: marketId,
-        yesPercentage: result.yesPercentage,
-        noPercentage: result.noPercentage,
+      const user = await prisma.user.findUnique({ where: { id: userId } });
+      eventBus.publish('PredictionPlaced', {
+        marketId,
+        userId,
+        username: user?.username,
+        optionText: result.optionText,
+        prices: result.prices,
         totalVolume: Number(result.totalVolume),
-        sentiment: result.yesPercentage > 50 ? 'BULLISH' : 'BEARISH'
+        sentiment: result.yesPercentage > 50 ? 'BULLISH' : 'BEARISH',
       });
-
-      // Broadcast user's prediction to followers
-      prisma.user.findUnique({ where: { id: userId } }).then(user => {
-        if (user) {
-          broadcastToFollowers(io, userId, {
-            username: user.username,
-            marketId: marketId,
-            prediction: result.prediction.potentialReturn ? 'YES' : 'NO' // simplified logic
-          });
-        }
-      }).catch(err => console.error(err));
     }
+
+    fraudService.checkTrade({ userId, marketId, optionId, amount: stake }).catch((err) => console.error('Fraud check failed:', err));
 
     res.status(201).json(result);
   } catch (error) {
@@ -192,9 +150,9 @@ exports.getUserPredictions = async (req, res) => {
       where: { userId: req.user.userId },
       include: {
         market: true,
-        option: true
+        option: true,
       },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
     res.json(predictions);
   } catch (error) {

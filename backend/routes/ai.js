@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const aiController = require('../controllers/aiController');
 const { authenticateToken } = require('../middleware/auth');
+const { aiLimiter } = require('../middleware/rateLimiters');
+
+router.use(aiLimiter);
 
 router.get('/summarize-market/:id', aiController.summarizeMarket);
 router.post('/chat/:id', authenticateToken, aiController.chat);

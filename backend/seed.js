@@ -1,10 +1,20 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const bcrypt = require('bcrypt');
+const { generateReferralCode } = require('./services/referralService');
+
+async function uniqueReferralCode() {
+  for (let i = 0; i < 5; i++) {
+    const code = generateReferralCode();
+    const existing = await prisma.user.findUnique({ where: { referralCode: code } });
+    if (!existing) return code;
+  }
+  throw new Error('Could not generate a unique referral code');
+}
 
 async function main() {
   console.log('Seeding database...');
-  
+
   // Create admin user
   const passwordHash = await bcrypt.hash('admin123', 10);
   const admin = await prisma.user.upsert({
@@ -14,7 +24,8 @@ async function main() {
       email: 'admin@meridian.test',
       username: 'admin',
       passwordHash,
-      totalBalance: 1000000
+      totalBalance: 1000000,
+      referralCode: await uniqueReferralCode()
     }
   });
 
