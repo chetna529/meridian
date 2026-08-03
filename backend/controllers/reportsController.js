@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const { toCsv } = require('../lib/csv');
 
 // GET /api/admin/reports/summary — growth, revenue-equivalent, market performance

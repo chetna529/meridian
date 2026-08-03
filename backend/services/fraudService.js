@@ -1,8 +1,7 @@
 // Rule-based fraud heuristics (not ML — see plan's explicit scope note). Runs inline after a
 // trade for fast-signal checks, and periodically via jobs/fraudScanJob.js for broader sweeps.
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const logger = require('../lib/logger');
 
 const RAPID_FIRE_WINDOW_MS = 60 * 1000;

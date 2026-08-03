@@ -11,6 +11,7 @@ router.get('/', marketController.getMarkets);
 router.get('/:id', marketController.getMarket);
 router.get('/:id/price-history', marketController.getPriceHistory);
 router.get('/:id/analytics', marketController.getAnalytics);
+router.get('/:id/raw-data', marketController.getRawAnalyticsData);
 
 // Protected admin routes — market lifecycle
 router.post('/', authenticateToken, requireAdmin, marketController.createMarket);

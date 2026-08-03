@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const positionService = require('../services/positionService');
 
 exports.getPortfolio = async (req, res) => {
@@ -8,6 +7,7 @@ exports.getPortfolio = async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
     const positionsRaw = await prisma.position.findMany({
       where: { userId },
       include: { market: { select: { id: true, title: true, status: true, category: true } }, option: true },

@@ -1,6 +1,5 @@
 const { Queue, Worker } = require('bullmq');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const eventBus = require('../lib/eventBus');
 const cache = require('../lib/cache');
 const logger = require('../lib/logger');

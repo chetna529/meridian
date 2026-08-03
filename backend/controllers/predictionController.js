@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const pricing = require('../lib/pricingService');
 const eventBus = require('../lib/eventBus');
 const walletService = require('../services/walletService');
@@ -26,6 +25,15 @@ exports.placePrediction = async (req, res) => {
     const result = await prisma.$transaction(async (tx) => {
       const market = await tx.market.findUnique({ where: { id: marketId }, include: { options: true } });
       if (!market || market.status !== 'LIVE') throw new Error('Market not available for trading');
+
+      // Check if user has already placed a prediction on this market
+      const existingPrediction = await tx.prediction.findFirst({
+        where: {
+          userId,
+          marketId,
+        },
+      });
+      if (existingPrediction) throw new Error('You have already placed a vote on this market');
 
       const orderedOptions = [...market.options].sort((a, b) => a.createdAt - b.createdAt);
       const optionIndex = orderedOptions.findIndex((o) => o.id === optionId);
@@ -118,7 +126,7 @@ exports.placePrediction = async (req, res) => {
         optionText: option.optionText,
         prices: orderedOptions.reduce((acc, o, i) => ({ ...acc, [o.id]: pricesAfter[i] }), {}),
       };
-    });
+    }, { timeout: 15000, maxWait: 10000 });
 
     const io = req.app.get('io');
     if (io) {

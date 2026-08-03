@@ -3,8 +3,7 @@
 // handlers are purely for post-commit fan-out: sockets, and any future side effects (email,
 // analytics). Nothing here is the source of truth.
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const eventBus = require('../lib/eventBus');
 const logger = require('../lib/logger');
 

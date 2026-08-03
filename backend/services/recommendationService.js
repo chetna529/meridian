@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 
 // Content-based scoring: category affinity (from the user's own history + followed traders')
 // plus a trending boost. No ML model — a transparent, explainable score for this scale.

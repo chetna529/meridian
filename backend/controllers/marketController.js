@@ -1,5 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../lib/prisma');
 const { checkBadges } = require('../lib/gamification');
 const { sendEmail } = require('../lib/email');
 
@@ -455,11 +454,21 @@ exports.getPriceHistory = async (req, res) => {
     const rangeMs = { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 }[range] || 86400e3;
     const since = new Date(Date.now() - rangeMs);
 
-    const points = await prisma.marketPriceHistory.findMany({
+    let points = await prisma.marketPriceHistory.findMany({
       where: { marketId: id, recordedAt: { gte: since } },
       orderBy: { recordedAt: 'asc' },
       include: { market: false },
     });
+
+    // If range returned too few points (e.g., tight timeframe), fetch recent 50 points
+    if (points.length < 2) {
+      points = await prisma.marketPriceHistory.findMany({
+        where: { marketId: id },
+        orderBy: { recordedAt: 'desc' },
+        take: 50,
+      });
+      points.reverse();
+    }
 
     const options = await prisma.marketOption.findMany({ where: { marketId: id } });
     const byOption = {};
@@ -486,6 +495,81 @@ exports.getAnalytics = async (req, res) => {
   } catch (error) {
     console.error('Error fetching market analytics:', error);
     res.status(500).json({ error: 'Failed to fetch market analytics' });
+  }
+};
+
+// GET /api/markets/:id/raw-data
+exports.getRawAnalyticsData = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const market = await prisma.market.findUnique({
+      where: { id },
+      include: { options: true }
+    });
+    if (!market) return res.status(404).json({ error: 'Market not found' });
+
+    const [analytics, priceHistory, recentTrades] = await Promise.all([
+      prisma.marketAnalytics.findFirst({ where: { marketId: id }, orderBy: { computedAt: 'desc' } }),
+      prisma.marketPriceHistory.findMany({
+        where: { marketId: id },
+        orderBy: { recordedAt: 'desc' },
+        take: 100
+      }),
+      prisma.prediction.findMany({
+        where: { marketId: id },
+        include: {
+          user: { select: { username: true, avatarUrl: true } },
+          option: { select: { optionText: true } }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 50
+      })
+    ]);
+
+    const optionMap = new Map(market.options.map(o => [o.id, o.optionText]));
+    const formattedHistory = priceHistory.map(p => ({
+      id: p.id,
+      optionId: p.optionId,
+      optionText: optionMap.get(p.optionId) || 'Option',
+      price: Number(p.price),
+      probabilityPercent: (Number(p.price) * 100).toFixed(1) + '%',
+      recordedAt: p.recordedAt
+    }));
+
+    const formattedTrades = recentTrades.map(t => ({
+      id: t.id,
+      username: t.user?.username || 'Anonymous',
+      avatarUrl: t.user?.avatarUrl || null,
+      optionText: t.option?.optionText || 'Option',
+      amountStaked: Number(t.amountStaked),
+      potentialReturn: Number(t.potentialReturn),
+      status: t.status,
+      createdAt: t.createdAt
+    }));
+
+    res.json({
+      market: {
+        id: market.id,
+        title: market.title,
+        category: market.category,
+        totalVolume: Number(market.totalVolume || 0),
+        liquidityParam: Number(market.liquidityParam || 100),
+        options: market.options
+      },
+      analytics: analytics || {
+        marketId: id,
+        volume24h: 0,
+        volume7d: 0,
+        tradersCount: 0,
+        liquidity: 0,
+        priceMove24h: 0
+      },
+      priceHistory: formattedHistory,
+      recentTrades: formattedTrades
+    });
+  } catch (error) {
+    console.error('Error fetching raw analytics data:', error);
+    res.status(500).json({ error: 'Failed to fetch raw analytics data' });
   }
 };
 

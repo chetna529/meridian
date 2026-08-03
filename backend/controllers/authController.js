@@ -1,11 +1,9 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const { OAuth2Client } = require('google-auth-library');
 const { sendEmail } = require('../lib/email');
 const referralService = require('../services/referralService');
-
-const prisma = new PrismaClient();
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-for-dev';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || 'placeholder-client-id';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);

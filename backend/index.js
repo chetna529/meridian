@@ -5,11 +5,9 @@ const cors = require('cors');
 const helmet = require('helmet');
 const http = require('http');
 const { Server } = require('socket.io');
-const { PrismaClient } = require('@prisma/client');
 const logger = require('./lib/logger');
 const { metricsMiddleware, metricsHandler } = require('./lib/metrics');
-
-const prisma = new PrismaClient();
+const prisma = require('./lib/prisma');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
