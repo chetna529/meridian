@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { AxiosError } from 'axios';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import api from '@/lib/api';
@@ -29,9 +30,21 @@ export default function LoginPage() {
       login(res.data.user, res.data.token);
       addToast('Logged in successfully!', 'success');
       router.push(res.data.user?.isAdmin ? '/admin' : '/');
-    } catch (err: any) {
-      console.error('Login error', err?.response || err);
-      addToast(err.response?.data?.error || 'Login failed', 'error');
+    } catch (error: unknown) {
+      let message = 'Login failed';
+      if (error instanceof AxiosError) {
+        const axiosError = error as AxiosError<{ error?: string }>;
+        message = axiosError.response?.data?.error || axiosError.message || message;
+        console.error('Login error', {
+          message: axiosError.message,
+          status: axiosError.response?.status,
+          data: axiosError.response?.data,
+          request: axiosError.request,
+        });
+      } else {
+        console.error('Login error', error);
+      }
+      addToast(message, 'error');
     }
   };
 
