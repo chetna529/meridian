@@ -21,6 +21,8 @@ function socketOptions() {
   return {
     reconnectStrategy: (retries) => (retries >= MAX_RECONNECT_ATTEMPTS ? new Error('Redis unavailable') : Math.min(retries * 100, 2000)),
     connectTimeout: CONNECT_TIMEOUT_MS,
+    tls: redisUrl.startsWith('rediss://') ? true : undefined,
+    rejectUnauthorized: redisUrl.startsWith('rediss://') ? false : undefined,
   };
 }
 

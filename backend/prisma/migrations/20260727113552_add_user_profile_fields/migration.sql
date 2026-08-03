@@ -1,0 +1,15 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN     "country" TEXT DEFAULT '',
+ADD COLUMN     "emailNotifications" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "fullName" TEXT DEFAULT '',
+ADD COLUMN     "kycStatus" TEXT NOT NULL DEFAULT 'Unverified',
+ADD COLUMN     "languagePreference" TEXT NOT NULL DEFAULT 'English',
+ADD COLUMN     "lastLoginAt" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "marketResultAlerts" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "newMarketAnnouncements" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN     "phone" TEXT DEFAULT '',
+ADD COLUMN     "preferredCurrency" TEXT NOT NULL DEFAULT 'INR',
+ADD COLUMN     "recommendedLayout" TEXT NOT NULL DEFAULT 'Default',
+ADD COLUMN     "themePreference" TEXT NOT NULL DEFAULT 'dark',
+ADD COLUMN     "timezone" TEXT DEFAULT '',
+ADD COLUMN     "walletUpdates" BOOLEAN NOT NULL DEFAULT true;

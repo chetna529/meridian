@@ -4,10 +4,7 @@ const prisma = new PrismaClient();
 const logger = require('../lib/logger');
 const cache = require('../lib/cache');
 
-const connection = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-};
+const connection = require('./connection');
 
 const analyticsQueue = new Queue('analyticsQueue', { connection, defaultJobOptions: { removeOnComplete: true, removeOnFail: true } });
 

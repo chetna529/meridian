@@ -6,10 +6,7 @@ const auditLog = require('../lib/auditLog');
 const cache = require('../lib/cache');
 const lifecycle = require('../services/marketLifecycle');
 
-const connection = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-};
+const connection = require('./connection');
 
 const marketPublishQueue = new Queue('marketPublishQueue', { connection, defaultJobOptions: { removeOnComplete: true, removeOnFail: true } });
 

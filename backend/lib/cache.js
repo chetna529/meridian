@@ -23,6 +23,8 @@ function createClient() {
       },
       keepAlive: 10000,
       connectTimeout: CONNECT_TIMEOUT_MS,
+      tls: redisUrl.startsWith('rediss://') ? true : undefined,
+      rejectUnauthorized: redisUrl.startsWith('rediss://') ? false : undefined,
     },
   });
 

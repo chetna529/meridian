@@ -5,10 +5,7 @@ const logger = require('../lib/logger');
 const auditLog = require('../lib/auditLog');
 const lifecycle = require('../services/marketLifecycle');
 
-const connection = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-};
+const connection = require('./connection');
 
 const settlementQueue = new Queue('settlementQueue', { connection, defaultJobOptions: { removeOnComplete: true, removeOnFail: true } });
 

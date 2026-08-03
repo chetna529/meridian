@@ -4,10 +4,7 @@ const prisma = new PrismaClient();
 const logger = require('../lib/logger');
 const eventBus = require('../lib/eventBus');
 
-const connection = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT || '6379'),
-};
+const connection = require('./connection');
 
 const broadcastQueue = new Queue('broadcastQueue', { connection, defaultJobOptions: { removeOnComplete: true, removeOnFail: true } });
 
