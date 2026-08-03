@@ -36,7 +36,17 @@ export default function MarketsPage() {
   
   // Custom modal state and toast support
   const [votedMarketData, setVotedMarketData] = useState<{ marketTitle: string; choiceText: string } | null>(null);
+  const [userPredictions, setUserPredictions] = useState<any[]>([]);
   const addToast = useUIStore(state => state.addToast);
+
+  const fetchUserPredictions = () => {
+    if (!isAuthenticated) return;
+    api.get('/predictions/my-predictions')
+      .then(res => {
+        setUserPredictions(res.data);
+      })
+      .catch(console.error);
+  };
 
   const fetchMarkets = () => {
     api.get('/markets')
@@ -56,7 +66,11 @@ export default function MarketsPage() {
     }
 
     fetchMarkets();
-    const interval = setInterval(fetchMarkets, 10000); // Auto refresh every 10 seconds
+    fetchUserPredictions();
+    const interval = setInterval(() => {
+      fetchMarkets();
+      fetchUserPredictions();
+    }, 10000); // Auto refresh every 10 seconds
 
     return () => clearInterval(interval);
   }, [isAuthenticated]);
@@ -150,6 +164,7 @@ export default function MarketsPage() {
               volume={Number(market.totalVolume).toLocaleString()} 
               options={market.options}
               isAdmin={Boolean(user?.isAdmin)}
+              hasVoted={userPredictions.some(p => p.marketId === market.id)}
               onDelete={() => {
                 api.delete(`/markets/${market.id}`)
                   .then(() => setMarkets((current) => current.filter((item) => item.id !== market.id)))
@@ -158,6 +173,7 @@ export default function MarketsPage() {
               onVoteSuccess={(marketTitle, choiceText) => {
                 setVotedMarketData({ marketTitle, choiceText });
                 fetchMarkets(); // Refresh odds immediately on vote
+                fetchUserPredictions(); // Refresh user predictions immediately
               }}
               onVoteError={(errorMsg) => {
                 addToast(errorMsg, 'error');
@@ -171,28 +187,28 @@ export default function MarketsPage() {
       {/* Center Success Modal Popup */}
       {votedMarketData && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 modal-backdrop-animate">
-          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl relative transform transition-all duration-300 scale-100 modal-card-animate">
+          <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl p-8 max-w-lg w-full text-center shadow-2xl relative transform transition-all duration-300 scale-100 modal-card-animate">
             <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-emerald-500 to-[var(--color-primary)] rounded-t-2xl"></div>
             
-            <div className="mx-auto w-16 h-16 bg-emerald-50 dark:bg-emerald-950/30 rounded-full flex items-center justify-center mb-4 border border-emerald-100 dark:border-emerald-900/50">
-              <svg className="w-8 h-8 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <div className="mx-auto w-20 h-20 bg-emerald-50 dark:bg-emerald-950/30 rounded-full flex items-center justify-center mb-6 border border-emerald-100 dark:border-emerald-900/50">
+              <svg className="w-10 h-10 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
 
-            <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-2">Vote Submitted!</h2>
-            <p className="text-xs text-[var(--color-text-secondary)] mb-4">
-              Your vote has been submitted and the odds have updated automatically!
+            <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-3">Vote Submitted Successfully!</h2>
+            <p className="text-sm text-[var(--color-text-secondary)] mb-6">
+              Your prediction has been recorded. The market odds and order book have updated in real time.
             </p>
 
-            <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl p-4 mb-6 text-left">
-              <div className="text-[10px] uppercase font-bold tracking-wider text-[var(--color-text-muted)] mb-1">Market</div>
-              <div className="text-sm font-semibold text-[var(--color-text-primary)] line-clamp-2 mb-3">
+            <div className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-xl p-6 mb-8 text-left">
+              <div className="text-xs uppercase font-bold tracking-wider text-[var(--color-text-muted)] mb-2">Market Details</div>
+              <div className="text-base font-semibold text-[var(--color-text-primary)] mb-4">
                 {votedMarketData.marketTitle}
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-[var(--color-text-secondary)]">Your Vote</span>
-                <span className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider text-white ${
+              <div className="flex items-center justify-between border-t border-[var(--color-border-light)] pt-4">
+                <span className="text-sm text-[var(--color-text-secondary)]">Your Staged Vote</span>
+                <span className={`px-4 py-1.5 rounded-lg text-sm font-bold uppercase tracking-wider text-white ${
                   votedMarketData.choiceText === 'YES' ? 'bg-[var(--color-success)]' : 'bg-[var(--color-danger)]'
                 }`}>
                   {votedMarketData.choiceText}
@@ -203,7 +219,7 @@ export default function MarketsPage() {
             <button
               type="button"
               onClick={() => setVotedMarketData(null)}
-              className="w-full bg-[var(--color-primary)] text-white px-4 py-2.5 rounded-lg text-sm font-semibold shadow-md hover:opacity-90 transition-opacity cursor-pointer"
+              className="w-full bg-[var(--color-primary)] text-white px-5 py-3 rounded-xl text-sm font-semibold shadow-md hover:opacity-90 transition-opacity cursor-pointer"
             >
               Done
             </button>
@@ -228,7 +244,8 @@ function MarketCard({
   isAdmin, 
   onDelete, 
   onVoteSuccess, 
-  onVoteError 
+  onVoteError,
+  hasVoted
 }: { 
   id: string; 
   title: string; 
@@ -244,6 +261,7 @@ function MarketCard({
   onDelete?: () => void; 
   onVoteSuccess?: (marketTitle: string, choiceText: string) => void; 
   onVoteError?: (errorMsg: string) => void; 
+  hasVoted?: boolean;
 }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -375,24 +393,30 @@ function MarketCard({
             <div className="h-full bg-[var(--color-danger)]" style={{ width: `${no}%` }}></div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-4">
-            <button
-              type="button"
-              disabled={!yesOption || status !== 'LIVE'}
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); yesOption && handleVote(yesOption.id); }}
-              className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Vote Yes
-            </button>
-            <button
-              type="button"
-              disabled={!noOption || status !== 'LIVE'}
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); noOption && handleVote(noOption.id); }}
-              className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Vote No
-            </button>
-          </div>
+          {hasVoted ? (
+            <div className="w-full text-center py-2 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-medium text-[var(--color-text-secondary)] border border-dashed border-[var(--color-border)] mt-4">
+              🔒 Prediction Locked (Voted)
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 pt-4">
+              <button
+                type="button"
+                disabled={!yesOption || status !== 'LIVE'}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); yesOption && handleVote(yesOption.id); }}
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Vote Yes
+              </button>
+              <button
+                type="button"
+                disabled={!noOption || status !== 'LIVE'}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); noOption && handleVote(noOption.id); }}
+                className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Vote No
+              </button>
+            </div>
+          )}
         </div>
       </Link>
     </div>

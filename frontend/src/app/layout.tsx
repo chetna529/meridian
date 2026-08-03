@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { Inter, Fraunces } from 'next/font/google';
 import './globals.css';
 import Providers from './providers';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
+const fraunces = Fraunces({ subsets: ['latin'], variable: '--font-fraunces' });
 
 export const metadata: Metadata = {
   title: 'Meridian | Navigate the Future',
@@ -16,7 +17,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={inter.variable} suppressHydrationWarning>
+    <html lang="en" className={`${inter.variable} ${fraunces.variable}`} suppressHydrationWarning>
       <body className="antialiased pt-16">
         <Providers>{children}</Providers>
       </body>

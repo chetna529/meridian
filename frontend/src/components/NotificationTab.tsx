@@ -5,9 +5,11 @@ import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import api from '@/lib/api';
 import socket from '@/lib/socket';
+import Modal from '@/components/ui/Modal';
 
 export default function NotificationTab() {
   const [isOpen, setIsOpen] = useState(false);
+  const [isAllModalOpen, setIsAllModalOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { isAuthenticated } = useAuthStore();
@@ -115,12 +117,49 @@ export default function NotificationTab() {
           </div>
 
           {notifications.length > 0 && (
-            <div className="p-3 border-t border-[var(--color-border-light)] text-center bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-tertiary)] transition-colors cursor-pointer">
+            <div 
+              onClick={() => {
+                setIsOpen(false);
+                setIsAllModalOpen(true);
+              }}
+              className="p-3 border-t border-[var(--color-border-light)] text-center bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-tertiary)] transition-colors cursor-pointer"
+            >
               <span className="text-xs font-semibold text-[var(--color-primary)]">View All Notifications</span>
             </div>
           )}
         </div>
       )}
+
+      <Modal
+        open={isAllModalOpen}
+        onClose={() => setIsAllModalOpen(false)}
+        title="All Notifications"
+      >
+        <div className="max-h-[400px] overflow-y-auto divide-y divide-[var(--color-border-light)] -mx-5 -my-5">
+          {notifications.length > 0 ? (
+            notifications.map((notification) => (
+              <div 
+                key={notification.id} 
+                className={`p-4 hover:bg-[var(--color-bg-secondary)] transition-colors cursor-pointer ${!notification.readAt ? 'bg-[var(--color-primary)]/5' : ''}`}
+              >
+                <div className="flex items-start gap-3">
+                  <div className={`w-2 h-2 mt-1.5 rounded-full flex-shrink-0 ${!notification.readAt ? 'bg-[var(--color-primary)]' : 'bg-transparent'}`}></div>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-[var(--color-text-primary)]">{notification.title}</p>
+                    <p className="text-xs text-[var(--color-text-secondary)] mt-1 leading-snug">{notification.message}</p>
+                    <p className="text-[10px] text-[var(--color-text-muted)] mt-2">{new Date(notification.createdAt).toLocaleString()}</p>
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="p-8 text-center">
+              <Bell className="w-8 h-8 text-[var(--color-border-dark)] mx-auto mb-3" />
+              <p className="text-sm text-[var(--color-text-secondary)]">You're all caught up!</p>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
